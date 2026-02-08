@@ -100,6 +100,9 @@ export default function StockContestTracker() {
   const [currentPrices, setCurrentPrices] = useState<Record<string, number>>(
     {}
   );
+  const [priceHistory, setPriceHistory] = useState<
+    Record<string, Record<string, number>>
+  >({});
 
   const [tradeForm, setTradeForm] = useState<TradeForm>({
     playerId: "",
@@ -117,12 +120,16 @@ export default function StockContestTracker() {
     const savedStartDate = localStorage.getItem("stockContest_startDate");
     const savedApiKey = localStorage.getItem("stockContest_polygonApiKey");
     const savedPrices = localStorage.getItem("stockContest_currentPrices");
+    const savedPriceHistory = localStorage.getItem(
+      "stockContest_priceHistory"
+    );
 
     if (savedPlayers) setPlayers(JSON.parse(savedPlayers));
     if (savedTrades) setTrades(JSON.parse(savedTrades));
     if (savedStartDate) setContestStartDate(savedStartDate);
     if (savedApiKey) setPolygonApiKey(savedApiKey);
     if (savedPrices) setCurrentPrices(JSON.parse(savedPrices));
+    if (savedPriceHistory) setPriceHistory(JSON.parse(savedPriceHistory));
   }, []);
 
   // Save data to localStorage whenever it changes
@@ -150,6 +157,13 @@ export default function StockContestTracker() {
       JSON.stringify(currentPrices)
     );
   }, [currentPrices]);
+
+  useEffect(() => {
+    localStorage.setItem(
+      "stockContest_priceHistory",
+      JSON.stringify(priceHistory)
+    );
+  }, [priceHistory]);
 
   // --- Player Logic ---
 
@@ -183,36 +197,58 @@ export default function StockContestTracker() {
   // --- Position Logic ---
 
   const getPlayerPositions = (playerId: string): Position[] => {
-    const playerTrades = trades.filter((t) => t.playerId === playerId);
+    const playerTrades = trades
+      .filter((t) => t.playerId === playerId)
+      .sort((a, b) => a.timestamp - b.timestamp);
     const positions: Record<
       string,
-      { shares: number; totalCost: number; trades: Trade[] }
+      { buyLots: Array<{ shares: number; price: number }>; trades: Trade[] }
     > = {};
 
     playerTrades.forEach((trade) => {
       if (!positions[trade.ticker]) {
-        positions[trade.ticker] = { shares: 0, totalCost: 0, trades: [] };
+        positions[trade.ticker] = { buyLots: [], trades: [] };
       }
 
       if (trade.type === "buy") {
-        positions[trade.ticker].shares += trade.shares;
-        positions[trade.ticker].totalCost += trade.shares * trade.price;
+        positions[trade.ticker].buyLots.push({
+          shares: trade.shares,
+          price: trade.price,
+        });
       } else {
-        positions[trade.ticker].shares -= trade.shares;
-        positions[trade.ticker].totalCost -= trade.shares * trade.price;
+        let sharesToSell = trade.shares;
+        while (
+          sharesToSell > 0 &&
+          positions[trade.ticker].buyLots.length > 0
+        ) {
+          const oldestLot = positions[trade.ticker].buyLots[0];
+          const sharesToUse = Math.min(sharesToSell, oldestLot.shares);
+          sharesToSell -= sharesToUse;
+          oldestLot.shares -= sharesToUse;
+          if (oldestLot.shares === 0) {
+            positions[trade.ticker].buyLots.shift();
+          }
+        }
       }
       positions[trade.ticker].trades.push(trade);
     });
 
     return Object.entries(positions)
-      .filter(([, pos]) => pos.shares > 0)
-      .map(([ticker, pos]) => ({
-        ticker,
-        shares: pos.shares,
-        avgCost: pos.totalCost / pos.shares,
-        totalCost: pos.totalCost,
-        trades: pos.trades,
-      }));
+      .filter(([, pos]) => pos.buyLots.length > 0)
+      .map(([ticker, pos]) => {
+        const shares = pos.buyLots.reduce((sum, lot) => sum + lot.shares, 0);
+        const totalCost = pos.buyLots.reduce(
+          (sum, lot) => sum + lot.shares * lot.price,
+          0
+        );
+        return {
+          ticker,
+          shares,
+          avgCost: totalCost / shares,
+          totalCost,
+          trades: pos.trades,
+        };
+      });
   };
 
   const getOpenPositionCount = (playerId: string): number => {
@@ -428,6 +464,17 @@ export default function StockContestTracker() {
       return;
     }
 
+    if (tradeForm.type === "buy") {
+      const tradeCost = parseFloat(tradeForm.shares) * parseFloat(tradeForm.price);
+      const stats = getPlayerStats(tradeForm.playerId);
+      if (tradeCost > stats.cashRemaining) {
+        alert(
+          `Insufficient cash. Available: ${formatCurrency(stats.cashRemaining)}, Trade cost: ${formatCurrency(tradeCost)}`
+        );
+        return;
+      }
+    }
+
     if (tradeForm.type === "sell") {
       const positions = getPlayerPositions(tradeForm.playerId);
       const position = positions.find((p) => p.ticker === ticker);
@@ -601,41 +648,54 @@ export default function StockContestTracker() {
       .sort((a, b) => b.returnPct - a.returnPct);
   };
 
+  const getPriceAtDate = (ticker: string, date: string): number | null => {
+    const history = priceHistory[ticker];
+    if (!history) return null;
+
+    // Exact match
+    if (history[date]) return history[date];
+
+    // Find the most recent price on or before this date
+    const dates = Object.keys(history).sort();
+    let bestDate: string | null = null;
+    for (const d of dates) {
+      if (d <= date) bestDate = d;
+      else break;
+    }
+    return bestDate ? history[bestDate] : null;
+  };
+
   const getPlayerValueAtDate = (playerId: string, asOfDate: string): number => {
     const playerTrades = trades.filter(
       (t) => t.playerId === playerId && t.date <= asOfDate
     );
 
-    const positions: Record<string, { shares: number; totalCost: number }> = {};
+    const positions: Record<string, number> = {};
     let cashSpent = 0;
     let cashReceived = 0;
-    const pricesAtDate: Record<string, number> = {};
+    const lastTradePrice: Record<string, number> = {};
 
     playerTrades
       .sort((a, b) => a.timestamp - b.timestamp)
       .forEach((trade) => {
-        pricesAtDate[trade.ticker] = trade.price;
-
-        if (!positions[trade.ticker]) {
-          positions[trade.ticker] = { shares: 0, totalCost: 0 };
-        }
+        lastTradePrice[trade.ticker] = trade.price;
+        if (!positions[trade.ticker]) positions[trade.ticker] = 0;
 
         if (trade.type === "buy") {
-          positions[trade.ticker].shares += trade.shares;
-          positions[trade.ticker].totalCost += trade.shares * trade.price;
+          positions[trade.ticker] += trade.shares;
           cashSpent += trade.shares * trade.price;
         } else {
-          positions[trade.ticker].shares -= trade.shares;
-          positions[trade.ticker].totalCost -= trade.shares * trade.price;
+          positions[trade.ticker] -= trade.shares;
           cashReceived += trade.shares * trade.price;
         }
       });
 
     let portfolioValue = 0;
-    Object.entries(positions).forEach(([ticker, pos]) => {
-      if (pos.shares > 0) {
-        const price = pricesAtDate[ticker] || 0;
-        portfolioValue += pos.shares * price;
+    Object.entries(positions).forEach(([ticker, shares]) => {
+      if (shares > 0) {
+        const price =
+          getPriceAtDate(ticker, asOfDate) || lastTradePrice[ticker] || 0;
+        portfolioValue += shares * price;
       }
     });
 
@@ -646,12 +706,18 @@ export default function StockContestTracker() {
   const getPerformanceChartData = () => {
     if (players.length === 0 || trades.length === 0) return [];
 
-    const allDates = [...new Set(trades.map((t) => t.date))].sort();
+    // Collect all dates from trades AND priceHistory
+    const dateSet = new Set<string>(trades.map((t) => t.date));
+    Object.values(priceHistory).forEach((tickerHistory) => {
+      Object.keys(tickerHistory).forEach((date) => dateSet.add(date));
+    });
 
     const today = new Date().toISOString().split("T")[0];
-    if (Object.keys(currentPrices).length > 0 && !allDates.includes(today)) {
-      allDates.push(today);
+    if (Object.keys(currentPrices).length > 0) {
+      dateSet.add(today);
     }
+
+    const allDates = [...dateSet].sort();
 
     return allDates.map((date) => {
       const dataPoint: Record<string, string> = { date };
@@ -693,7 +759,7 @@ export default function StockContestTracker() {
   // --- Import / Export ---
 
   const exportData = () => {
-    const data = { players, trades, contestStartDate };
+    const data = { players, trades, contestStartDate, currentPrices, priceHistory };
     const blob = new Blob([JSON.stringify(data, null, 2)], {
       type: "application/json",
     });
@@ -716,6 +782,7 @@ export default function StockContestTracker() {
           if (data.contestStartDate)
             setContestStartDate(data.contestStartDate);
           if (data.currentPrices) setCurrentPrices(data.currentPrices);
+          if (data.priceHistory) setPriceHistory(data.priceHistory);
           alert("Data imported successfully!");
         } catch {
           alert("Error importing data. Please check the file format.");
@@ -1032,7 +1099,7 @@ export default function StockContestTracker() {
                         {player.bestTrade && (
                           <div className="flex justify-between">
                             <span className="text-gray-500">Best Trade</span>
-                            <span className="font-medium text-green-600">
+                            <span className={`font-medium ${player.bestTrade.gainPct >= 0 ? "text-green-600" : "text-red-600"}`}>
                               {player.bestTrade.ticker} (
                               {formatPercent(player.bestTrade.gainPct)})
                             </span>
@@ -1041,7 +1108,7 @@ export default function StockContestTracker() {
                         {player.worstTrade && (
                           <div className="flex justify-between">
                             <span className="text-gray-500">Worst Trade</span>
-                            <span className="font-medium text-red-600">
+                            <span className={`font-medium ${player.worstTrade.gainPct >= 0 ? "text-green-600" : "text-red-600"}`}>
                               {player.worstTrade.ticker} (
                               {formatPercent(player.worstTrade.gainPct)})
                             </span>
