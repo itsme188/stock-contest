@@ -5,6 +5,8 @@ import {
   buildReportData,
   buildCommentaryPrompt,
   buildEmailHtml,
+  buildPlainText,
+  formatCommentary,
 } from "@/lib/email";
 
 // --- Helpers ---
@@ -73,6 +75,7 @@ describe("buildReportData", () => {
     expect(data.reportDate).toBe("2026-02-10");
     expect(data.leaderboard).toHaveLength(3);
     expect(data.weeklyTrades).toHaveLength(1);
+    expect(data.weekDeltas).toHaveLength(3);
     expect(data.players).toBe(players);
     expect(data.currentPrices).toBe(currentPrices);
   });
@@ -81,6 +84,30 @@ describe("buildReportData", () => {
     const data = buildReportData(players, trades, currentPrices, "2026-02-10");
     // p1 has a position with a gain, should be first
     expect(data.leaderboard[0].name).toBe("Daddy");
+  });
+
+  it("computes week-over-week deltas", () => {
+    // Trade on Feb 8 means it's within the last week relative to Feb 10
+    // so "previous week" leaderboard has no trades for p1 -> p1 was at $100k
+    // current leaderboard: p1 bought 100 shares at $50, now worth $55 each
+    // p1 total value = $95,000 cash + $5,500 = $100,500
+    // week change = $100,500 - $100,000 = $500
+    const data = buildReportData(players, trades, currentPrices, "2026-02-10");
+    const daddyDelta = data.weekDeltas.find((d) => d.name === "Daddy");
+    expect(daddyDelta).toBeDefined();
+    expect(daddyDelta!.weekChange).toBe(500);
+    expect(daddyDelta!.weekChangePct).toBeCloseTo(0.5, 1);
+  });
+
+  it("detects rank changes", () => {
+    // Before this week: all players at $100k, no trades -> tied
+    // After: Daddy has a gain, others don't
+    // Daddy should be rank 0 now. Before, all were effectively tied.
+    const data = buildReportData(players, trades, currentPrices, "2026-02-10");
+    const daddyDelta = data.weekDeltas.find((d) => d.name === "Daddy");
+    expect(daddyDelta).toBeDefined();
+    // Daddy moved up or stayed (exact rank depends on sort stability for ties)
+    expect(daddyDelta!.rankChange).toBeGreaterThanOrEqual(0);
   });
 });
 
@@ -114,15 +141,52 @@ describe("buildCommentaryPrompt", () => {
 
     expect(prompt).toContain("delve");
     expect(prompt).toContain("landscape");
-    expect(prompt).toContain("do NOT use");
+    expect(prompt).toContain("Do NOT use");
   });
 
-  it("specifies casual tone", () => {
+  it("specifies hedge fund letter tone", () => {
     const data = buildReportData(players, trades, currentPrices, "2026-02-10");
     const prompt = buildCommentaryPrompt(data);
 
-    expect(prompt).toContain("casual and fun");
-    expect(prompt).toContain("family");
+    expect(prompt).toContain("investor letter");
+    expect(prompt).toContain("dry");
+    expect(prompt).toContain("matter-of-fact");
+  });
+
+  it("includes week-over-week change data", () => {
+    const data = buildReportData(players, trades, currentPrices, "2026-02-10");
+    const prompt = buildCommentaryPrompt(data);
+
+    expect(prompt).toContain("Week:");
+    expect(prompt).toContain("Realized P&L:");
+    expect(prompt).toContain("Win rate:");
+  });
+
+  it("includes example output", () => {
+    const data = buildReportData(players, trades, currentPrices, "2026-02-10");
+    const prompt = buildCommentaryPrompt(data);
+
+    expect(prompt).toContain("EXAMPLE:");
+  });
+});
+
+describe("formatCommentary", () => {
+  it("converts **bold** to <strong>", () => {
+    const result = formatCommentary("This is **bold text** here.");
+    expect(result).toContain("<strong>bold text</strong>");
+    expect(result).not.toContain("**");
+  });
+
+  it("converts *italic* to <em>", () => {
+    const result = formatCommentary("This is *italic text* here.");
+    expect(result).toContain("<em>italic text</em>");
+    expect(result).not.toContain("*italic text*");
+  });
+
+  it("splits paragraphs on double newlines", () => {
+    const result = formatCommentary("Paragraph one.\n\nParagraph two.");
+    const pCount = (result.match(/<p /g) || []).length;
+    expect(pCount).toBe(2);
   });
 });
 
@@ -198,5 +262,102 @@ describe("buildEmailHtml", () => {
 
     // AAPL has a gain (bought at 50, current 55), should show green
     expect(html).toContain("#059669"); // green for gains
+  });
+
+  it("converts markdown bold to strong tags in commentary", () => {
+    const data = buildReportData(players, trades, currentPrices, "2026-02-10");
+    const html = buildEmailHtml(data, "This is **really bold** stuff.");
+
+    expect(html).toContain("<strong>really bold</strong>");
+    expect(html).not.toContain("**really bold**");
+  });
+
+  it("includes week change indicators", () => {
+    const data = buildReportData(players, trades, currentPrices, "2026-02-10");
+    const html = buildEmailHtml(data, "Commentary.");
+
+    // Should contain up/down triangle arrows
+    expect(html).toMatch(/&#9650;|&#9660;/);
+  });
+
+  it("includes gradient header", () => {
+    const data = buildReportData(players, trades, currentPrices, "2026-02-10");
+    const html = buildEmailHtml(data, "Commentary.");
+
+    expect(html).toContain("linear-gradient");
+  });
+
+  it("includes gain/loss progress bars in portfolio details", () => {
+    const data = buildReportData(players, trades, currentPrices, "2026-02-10");
+    const html = buildEmailHtml(data, "Commentary.");
+
+    // AAPL has a 10% gain, should show a bar
+    expect(html).toContain("width: 10%"); // 10% gain bar
+  });
+});
+
+describe("buildPlainText", () => {
+  const trades = [
+    makeTrade({ playerId: "p1", ticker: "AAPL", date: "2026-02-08" }),
+    makeTrade({
+      playerId: "p2",
+      ticker: "GOOG",
+      date: "2026-02-09",
+      price: 180,
+      shares: 50,
+    }),
+  ];
+  const currentPrices = { AAPL: 55, GOOG: 190 };
+
+  it("returns plain text without HTML tags", () => {
+    const data = buildReportData(players, trades, currentPrices, "2026-02-10");
+    const text = buildPlainText(data, "Commentary paragraph.");
+
+    expect(text).not.toContain("<");
+    expect(text).not.toContain(">");
+  });
+
+  it("includes commentary text", () => {
+    const data = buildReportData(players, trades, currentPrices, "2026-02-10");
+    const text = buildPlainText(data, "Daddy is crushing it.");
+
+    expect(text).toContain("Daddy is crushing it.");
+  });
+
+  it("includes leaderboard data", () => {
+    const data = buildReportData(players, trades, currentPrices, "2026-02-10");
+    const text = buildPlainText(data, "Commentary.");
+
+    expect(text).toContain("Daddy");
+    expect(text).toContain("Eli");
+    expect(text).toContain("Yitzi");
+    expect(text).toContain("LEADERBOARD");
+  });
+
+  it("strips markdown formatting", () => {
+    const data = buildReportData(players, trades, currentPrices, "2026-02-10");
+    const text = buildPlainText(data, "This is **bold** and *italic*.");
+
+    expect(text).toContain("This is bold and italic.");
+    expect(text).not.toContain("**");
+    expect(text).not.toContain("*italic*");
+  });
+
+  it("includes trade details", () => {
+    const data = buildReportData(players, trades, currentPrices, "2026-02-10");
+    const text = buildPlainText(data, "Commentary.");
+
+    expect(text).toContain("AAPL");
+    expect(text).toContain("GOOG");
+    expect(text).toContain("BUY");
+  });
+
+  it("includes portfolio details with positions", () => {
+    const data = buildReportData(players, trades, currentPrices, "2026-02-10");
+    const text = buildPlainText(data, "Commentary.");
+
+    expect(text).toContain("PORTFOLIO DETAILS");
+    expect(text).toContain("$50.00"); // avg cost
+    expect(text).toContain("$55.00"); // current price
   });
 });

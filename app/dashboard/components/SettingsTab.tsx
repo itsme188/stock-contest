@@ -238,17 +238,27 @@ export default function SettingsTab({
             </div>
           </div>
 
-          <div className="pt-2">
-            <button
-              onClick={sendTestEmail}
-              disabled={sendingEmail || !gmailAddress || !gmailAppPassword || !anthropicApiKey}
-              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm font-medium"
-            >
-              {sendingEmail ? "Sending..." : "Send Test Email"}
-            </button>
+          <div className="pt-2 flex flex-col gap-2">
+            <div className="flex gap-3 items-center">
+              <a
+                href="/email/preview"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium inline-block"
+              >
+                Preview Email
+              </a>
+              <button
+                onClick={sendTestEmail}
+                disabled={sendingEmail || !gmailAddress || !gmailAppPassword || !anthropicApiKey}
+                className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm font-medium"
+              >
+                {sendingEmail ? "Sending..." : "Send Without Preview"}
+              </button>
+            </div>
             {emailStatus && (
               <p
-                className={`text-sm mt-2 ${emailStatus.startsWith("Error") ? "text-red-600" : "text-green-600"}`}
+                className={`text-sm ${emailStatus.startsWith("Error") ? "text-red-600" : "text-green-600"}`}
               >
                 {emailStatus}
               </p>

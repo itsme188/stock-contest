@@ -25,7 +25,7 @@ npm run test:watch # Vitest in watch mode
 - **Email**: nodemailer (Gmail SMTP with App Password)
 - **AI**: @anthropic-ai/sdk (Claude Sonnet for weekly email commentary)
 - **Prices**: Polygon.io API (free tier, 5 calls/min)
-- **Testing**: Vitest (88 tests)
+- **Testing**: Vitest (105 tests)
 
 ## Architecture
 
@@ -41,13 +41,15 @@ npm run test:watch # Vitest in watch mode
 - `GET /api/prices?ticker=AAPL&date=2026-01-15` — Single ticker price fetch
 - `POST /api/prices/update` — Refresh all open ticker prices (batch, rate-limited)
 - `POST /api/prices/backfill` — Bulk historical daily prices via Polygon range API
-- `POST /api/email/weekly` — Weekly email report with AI commentary
+- `POST /api/email/preview` — Generate email preview (AI commentary + rendered HTML, no send)
+- `POST /api/email/weekly` — Weekly email report with AI commentary (accepts optional pre-generated commentary)
 
 ### Key Files
 - `app/dashboard/StockContestTracker.tsx` — State shell (~410 lines), all state + handlers
 - `app/dashboard/components/` — DashboardTab, TradesTab, PlayersTab, SettingsTab
 - `lib/contest.ts` — Pure business logic (types, FIFO, P&L, stats, validation, chart data)
-- `lib/email.ts` — Email report logic (report data, AI prompt, HTML template, SMTP send)
+- `lib/email.ts` — Email report logic (report data, week deltas, AI prompt, HTML/plain text templates, SMTP send)
+- `app/email/preview/page.tsx` — Email preview page (iframe preview, regenerate, send)
 - `lib/db.ts` — SQLite connection, schema, CRUD
 - `data/` — SQLite database + exported contest data snapshots
 
@@ -92,6 +94,8 @@ Originally a single-file React app (Jan 14, 2026), ported to this Next.js projec
 
 **Feb 11 (session 2)**: Fixed trade form: wired up Fetch Price button (was disconnected during UI decomposition), added sell-order ticker dropdown, cash-aware share calculation, manual "Calculate Shares" button (no API needed). Fixed Dashboard: Refresh Prices always visible, portfolio value shows cash+positions. Fixed Polygon rate limiting (61s between batches).
 
+**Feb 11 (session 3)**: Overhauled weekly email: polished HTML template (gradient header, week-over-week deltas with ▲/▼ arrows, gain/loss bars, portfolio details), added plain text fallback, built email preview page (`/email/preview`) with regenerate + send. Rewrote AI commentary prompt — hedge fund investor letter tone (Buffett-style), expanded banned AI words to 56 (sourced from Wikipedia "Signs of AI writing" + academic research), fixed position data to show total dollars deployed instead of just per-share price. 32 email tests.
+
 Seed data: 3 players, 17 trades, prices through Jan 30 — load via Settings > Import from `data/stock-contest-2026-01-30.json`.
 
 ## Known Limitations
@@ -104,6 +108,10 @@ Seed data: 3 players, 17 trades, prices through Jan 30 — load via Settings > I
 - **Always provide a non-API fallback for user actions.** The trade form needs a manual "Calculate Shares" button that works without Polygon, since the API has strict rate limits.
 - **Polygon `/prev` endpoint returns yesterday's close, not today's open.** Always pass a date parameter to get opening prices for trade logging.
 - **Labels must match data.** "Portfolio Value" showing only positions (not cash) was confusing. Use precise labels: "Total Value" (cash+positions), "Cash", "Positions".
+- **Pre-compute everything for the AI — never make it do math.** Show `$19,888 deployed, now worth $20,500 (+3.07%)`, not `44 shares @ $452 avg cost`. The model will confuse per-share price with position size.
+- **When data can be misinterpreted, add an explicit rule.** Even with better data, add a strict rule like "Position size = total dollars deployed, NOT per-share price." Belt and suspenders.
+- **AI writing tells are well-documented — ban them explicitly.** Wikipedia's "Signs of AI writing" page lists words (delve, elevate, resonate, seamless, testament, intricate, etc.) whose usage spiked post-LLM. Also ban rhetorical patterns ("it's not X, it's Y") and glazing (impressive, incredible, remarkable).
+- **Tone instructions need a concrete example.** "Be dry and matter-of-fact" is vague. A full example paragraph in the desired voice produces much more consistent output.
 
 ## Core Principles
 

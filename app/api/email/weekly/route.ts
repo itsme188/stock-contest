@@ -7,8 +7,9 @@ import {
   sendWeeklyEmail,
 } from "@/lib/email";
 
-export async function POST() {
+export async function POST(request: Request) {
   try {
+    const body = await request.json().catch(() => ({}));
     const contestData = getContestData();
     const players = contestData.players as Player[];
     const trades = contestData.trades as Trade[];
@@ -41,7 +42,12 @@ export async function POST() {
     }
 
     const reportData = buildReportData(players, trades, currentPrices);
-    const commentary = await generateCommentary(reportData, anthropicApiKey);
+
+    // Use pre-generated commentary from preview page, or generate fresh
+    const commentary =
+      (body as { commentary?: string }).commentary ||
+      (await generateCommentary(reportData, anthropicApiKey));
+
     await sendWeeklyEmail(
       { gmailAddress, gmailAppPassword, anthropicApiKey, playerEmails },
       reportData,
