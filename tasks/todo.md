@@ -4,11 +4,10 @@
 - [x] Set up Next.js project with TypeScript, Tailwind, Recharts
 - [x] Port StockContestTracker component from JSX to TypeScript
 - [x] Create CLAUDE.md project guidance
-
-## Future Improvements
-- [ ] Break StockContestTracker into smaller sub-components
-- [ ] Migrate from localStorage to SQLite for persistence
-- [ ] Add API routes for server-side price fetching (avoid CORS proxies)
-- [ ] Add automated daily price updates
-- [ ] Add tests for position/P&L calculations
-- [ ] Add historical performance chart with daily price data
+- [x] Extract pure business logic into `lib/contest.ts` (73 tests)
+- [x] Break UI into 4 sub-components (DashboardTab, TradesTab, PlayersTab, SettingsTab)
+- [x] Migrate from localStorage to SQLite (`lib/db.ts` + `/api/contest`)
+- [x] Server-side price fetching (`/api/prices`) — no more CORS proxies
+- [x] Weekly email report with AI commentary (`lib/email.ts` + `/api/email/weekly`, 15 tests)
+- [x] Automated price refresh (`/api/prices/update`) — Refresh Prices button on Dashboard
+- [x] Historical price backfill (`/api/prices/backfill`) — Polygon range API for smooth chart data

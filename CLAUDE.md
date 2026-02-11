@@ -21,21 +21,35 @@ npm run test:watch # Vitest in watch mode
 - **Framework**: Next.js 16 with React 19, TypeScript 5
 - **Styling**: Tailwind CSS 4
 - **Charts**: Recharts
-- **Storage**: localStorage (client-side)
-- **Testing**: Vitest
+- **Storage**: SQLite via better-sqlite3 (server-side, `data/contest.db`)
+- **Email**: nodemailer (Gmail SMTP with App Password)
+- **AI**: @anthropic-ai/sdk (Claude Sonnet for weekly email commentary)
+- **Prices**: Polygon.io API (free tier, 5 calls/min)
+- **Testing**: Vitest (88 tests)
 
 ## Architecture
 
 ### Data Flow
-1. All data stored in browser localStorage (players, trades, current prices)
-2. Client-side computation of positions, P&L, leaderboard
-3. Manual price entry or API fetch via Polygon.io (requires free API key)
-4. Import/export contest data as JSON files
+1. All data stored in SQLite (`data/contest.db`) via API routes
+2. Client loads from `GET /api/contest`, saves via debounced `PUT /api/contest` (500ms)
+3. Client-side computation of positions, P&L, leaderboard
+4. Price fetching via server-side Polygon.io API (no CORS proxies)
+5. Import/export contest data as JSON files
 
-### Key Directories
-- `app/dashboard/` - Main UI (StockContestTracker client component)
-- `data/` - Exported contest data snapshots
-- `tasks/` - Todo and lessons files
+### API Routes
+- `GET/PUT /api/contest` — Full contest data persistence (SQLite)
+- `GET /api/prices?ticker=AAPL&date=2026-01-15` — Single ticker price fetch
+- `POST /api/prices/update` — Refresh all open ticker prices (batch, rate-limited)
+- `POST /api/prices/backfill` — Bulk historical daily prices via Polygon range API
+- `POST /api/email/weekly` — Weekly email report with AI commentary
+
+### Key Files
+- `app/dashboard/StockContestTracker.tsx` — State shell (~410 lines), all state + handlers
+- `app/dashboard/components/` — DashboardTab, TradesTab, PlayersTab, SettingsTab
+- `lib/contest.ts` — Pure business logic (types, FIFO, P&L, stats, validation, chart data)
+- `lib/email.ts` — Email report logic (report data, AI prompt, HTML template, SMTP send)
+- `lib/db.ts` — SQLite connection, schema, CRUD
+- `data/` — SQLite database + exported contest data snapshots
 
 ### Contest Rules
 - $100,000 starting cash per player
@@ -68,17 +82,15 @@ Use `@/*` for imports.
 
 ## Project History
 
-This project was originally built as a single-file React app (`stock-contest-tracker.jsx`) inside a Claude local agent session in VSCode on January 14, 2026. It also had a standalone HTML version. Both lived in `~/Library/Application Support/Claude/local-agent-mode-sessions/` with no git repo or proper project structure.
+Originally a single-file React app (Jan 14, 2026), ported to this Next.js project on Feb 8, 2026. Dev server runs on port 3001 (port 3000 is used by vanguard-skin).
 
-On February 8, 2026, the app was ported into this organized Next.js project:
-1. Scaffolded with `create-next-app` (Next.js 16, TypeScript, Tailwind 4, ESLint)
-2. Added Recharts and Vitest as dependencies
-3. Ported the ~1,300-line JSX component to TypeScript (`app/dashboard/StockContestTracker.tsx`)
-4. Created project guidance (`CLAUDE.md`), task tracking (`tasks/`), and seeded contest data (`data/`)
-5. Configured dev server on port 3001 (port 3000 is used by the vanguard-skin portfolio dashboard)
-6. All data remains in localStorage — SQLite migration is a future improvement
+**Feb 8**: Scaffolded Next.js 16 project, ported JSX to TypeScript, seeded contest data.
 
-The existing contest data (3 players, 17 trades, price history through Jan 30) can be loaded via Settings > Import from `data/stock-contest-2026-01-30.json`.
+**Feb 11**: Extracted business logic to `lib/contest.ts` (73 tests), decomposed UI into 4 tab components, migrated localStorage to SQLite, added server-side price fetching.
+
+**Feb 11**: Added weekly email reports with AI commentary (`lib/email.ts`, 15 tests), automated price refresh and historical backfill via Polygon.io range API.
+
+Seed data: 3 players, 17 trades, prices through Jan 30 — load via Settings > Import from `data/stock-contest-2026-01-30.json`.
 
 ## Core Principles
 
