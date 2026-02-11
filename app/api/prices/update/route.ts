@@ -40,7 +40,7 @@ export async function POST() {
     const BATCH_SIZE = 5;
     for (let i = 0; i < openTickers.length; i += BATCH_SIZE) {
       if (i > 0) {
-        await new Promise((resolve) => setTimeout(resolve, 12500));
+        await new Promise((resolve) => setTimeout(resolve, 61000));
       }
 
       const batch = openTickers.slice(i, i + BATCH_SIZE);

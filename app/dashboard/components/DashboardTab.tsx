@@ -48,7 +48,13 @@ export default function DashboardTab({
 
   const refreshAllPrices = async () => {
     setRefreshing(true);
-    setRefreshStatus("");
+    const tickerCount = allOpenTickers.length;
+    const batches = Math.ceil(tickerCount / 5);
+    if (batches > 1) {
+      setRefreshStatus(`Fetching batch 1/${batches} (free tier: 5/min)...`);
+    } else {
+      setRefreshStatus("Fetching prices...");
+    }
     try {
       const res = await fetch("/api/prices/update", { method: "POST" });
       const data = await res.json();
@@ -65,7 +71,8 @@ export default function DashboardTab({
           return next;
         });
         const count = Object.keys(data.updated).length;
-        setRefreshStatus(`Updated ${count} price${count !== 1 ? "s" : ""}`);
+        const msg = `Updated ${count} price${count !== 1 ? "s" : ""}`;
+        setRefreshStatus(data.errors?.length ? `${msg} (${data.errors.length} failed)` : msg);
       } else {
         setRefreshStatus(`Error: ${data.error}`);
       }
@@ -174,15 +181,19 @@ export default function DashboardTab({
                   {refreshStatus}
                 </span>
               )}
-              {polygonApiKey && (
-                <button
-                  onClick={refreshAllPrices}
-                  disabled={refreshing}
-                  className="px-3 py-1.5 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                >
-                  {refreshing ? "Refreshing..." : "Refresh Prices"}
-                </button>
-              )}
+              <button
+                onClick={() => {
+                  if (!polygonApiKey) {
+                    setRefreshStatus("Add Polygon API key in Settings first");
+                    return;
+                  }
+                  refreshAllPrices();
+                }}
+                disabled={refreshing}
+                className="px-3 py-1.5 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                {refreshing ? "Refreshing..." : "Refresh Prices"}
+              </button>
               <button
                 onClick={() => {
                   const url = `https://finance.yahoo.com/quotes/${allOpenTickers.join(",")}/view/v1`;
@@ -297,15 +308,21 @@ export default function DashboardTab({
 
             <div className="space-y-3">
               <div className="flex justify-between">
-                <span className="text-gray-500">Portfolio Value</span>
-                <span className="font-medium">
-                  {formatCurrency(player.portfolioValue)}
+                <span className="text-gray-500">Total Value</span>
+                <span className="font-semibold">
+                  {formatCurrency(player.totalValue)}
                 </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-500">Cash</span>
                 <span className="font-medium">
                   {formatCurrency(player.cashRemaining)}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Positions</span>
+                <span className="font-medium">
+                  {formatCurrency(player.portfolioValue)}
                 </span>
               </div>
               <div className="flex justify-between">

@@ -9,6 +9,8 @@ import {
   DEFAULT_POSITION_SIZE,
   getLeaderboard,
   getPerformanceChartData,
+  getPlayerPositions,
+  getPlayerStats,
   validateTrade,
 } from "@/lib/contest";
 import DashboardTab from "./components/DashboardTab";
@@ -153,12 +155,11 @@ export default function StockContestTracker() {
     setPriceError("");
 
     const targetDate = date || tradeForm.date;
-    const today = new Date().toISOString().split("T")[0];
-    const isHistorical = targetDate < today;
 
     try {
       const params = new URLSearchParams({ ticker });
-      if (isHistorical) params.set("date", targetDate);
+      // Always pass date to get opening price for that day
+      params.set("date", targetDate);
 
       const res = await fetch(`/api/prices?${params}`);
       const data = await res.json();
@@ -190,8 +191,21 @@ export default function StockContestTracker() {
 
     const price = await fetchStockPrice(tradeForm.ticker);
     if (price) {
-      const shares = Math.floor(DEFAULT_POSITION_SIZE / price);
-      setTradeForm((prev) => ({ ...prev, shares: shares.toString() }));
+      if (tradeForm.type === "sell" && tradeForm.playerId) {
+        const positions = getPlayerPositions(tradeForm.playerId, trades);
+        const position = positions.find(p => p.ticker === tradeForm.ticker.toUpperCase());
+        if (position) {
+          setTradeForm((prev) => ({ ...prev, shares: position.shares.toString() }));
+        }
+      } else if (tradeForm.playerId) {
+        const stats = getPlayerStats(tradeForm.playerId, trades, currentPrices);
+        const budget = Math.min(DEFAULT_POSITION_SIZE, stats.cashRemaining);
+        const shares = Math.floor(budget / price);
+        setTradeForm((prev) => ({ ...prev, shares: shares.toString() }));
+      } else {
+        const shares = Math.floor(DEFAULT_POSITION_SIZE / price);
+        setTradeForm((prev) => ({ ...prev, shares: shares.toString() }));
+      }
     }
   };
 
@@ -287,9 +301,6 @@ export default function StockContestTracker() {
   const leaderboard = getLeaderboard(players, trades, currentPrices);
   const chartData = getPerformanceChartData(players, trades, currentPrices, priceHistory);
 
-  // Suppress fetchingPrice/fetchPriceAndCalculateShares unused warnings
-  void fetchingPrice;
-  void fetchPriceAndCalculateShares;
 
   // --- Render ---
 
@@ -372,6 +383,7 @@ export default function StockContestTracker() {
           <TradesTab
             players={players}
             trades={trades}
+            currentPrices={currentPrices}
             tradeForm={tradeForm}
             setTradeForm={setTradeForm}
             showAddTrade={showAddTrade}
@@ -380,6 +392,8 @@ export default function StockContestTracker() {
             setPriceError={setPriceError}
             addTrade={addTrade}
             deleteTrade={deleteTrade}
+            fetchingPrice={fetchingPrice}
+            fetchPriceAndCalculateShares={fetchPriceAndCalculateShares}
           />
         )}
 

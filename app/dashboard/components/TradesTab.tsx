@@ -4,12 +4,15 @@ import {
   type TradeForm,
   DEFAULT_POSITION_SIZE,
   getOpenPositionCount,
+  getPlayerPositions,
+  getPlayerStats,
   formatCurrency,
 } from "@/lib/contest";
 
 interface TradesTabProps {
   players: Player[];
   trades: Trade[];
+  currentPrices: Record<string, number>;
   tradeForm: TradeForm;
   setTradeForm: React.Dispatch<React.SetStateAction<TradeForm>>;
   showAddTrade: boolean;
@@ -18,11 +21,14 @@ interface TradesTabProps {
   setPriceError: (error: string) => void;
   addTrade: () => void;
   deleteTrade: (id: string) => void;
+  fetchingPrice: boolean;
+  fetchPriceAndCalculateShares: () => void;
 }
 
 export default function TradesTab({
   players,
   trades,
+  currentPrices,
   tradeForm,
   setTradeForm,
   showAddTrade,
@@ -31,6 +37,8 @@ export default function TradesTab({
   setPriceError,
   addTrade,
   deleteTrade,
+  fetchingPrice,
+  fetchPriceAndCalculateShares,
 }: TradesTabProps) {
   return (
     <div className="space-y-4">
@@ -139,66 +147,121 @@ export default function TradesTab({
                 <label className="block text-sm font-medium text-gray-700 mb-1">
                   Ticker Symbol
                 </label>
-                <input
-                  type="text"
-                  value={tradeForm.ticker}
-                  onChange={(e) =>
-                    setTradeForm({
-                      ...tradeForm,
-                      ticker: e.target.value.toUpperCase(),
-                      price: "",
-                      shares: "",
-                    })
-                  }
-                  placeholder="e.g., AAPL"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 uppercase"
-                />
+                {tradeForm.type === "sell" && tradeForm.playerId ? (
+                  <select
+                    value={tradeForm.ticker}
+                    onChange={(e) =>
+                      setTradeForm({
+                        ...tradeForm,
+                        ticker: e.target.value,
+                        price: "",
+                        shares: "",
+                      })
+                    }
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  >
+                    <option value="">Select position to sell</option>
+                    {getPlayerPositions(tradeForm.playerId, trades).map((pos) => (
+                      <option key={pos.ticker} value={pos.ticker}>
+                        {pos.ticker} ({pos.shares} shares @ {formatCurrency(pos.avgCost)})
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    value={tradeForm.ticker}
+                    onChange={(e) =>
+                      setTradeForm({
+                        ...tradeForm,
+                        ticker: e.target.value.toUpperCase(),
+                        price: "",
+                        shares: "",
+                      })
+                    }
+                    placeholder="e.g., AAPL"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 uppercase"
+                  />
+                )}
               </div>
 
               {/* Quick action buttons */}
               <div className="space-y-2">
                 <button
-                  onClick={() => {
-                    if (tradeForm.ticker) {
+                  onClick={fetchPriceAndCalculateShares}
+                  disabled={!tradeForm.ticker || fetchingPrice}
+                  className="w-full py-2.5 text-sm font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  {fetchingPrice ? "Fetching..." : "Fetch Price & Calculate Shares"}
+                </button>
+                {tradeForm.ticker && (
+                  <button
+                    onClick={() => {
                       const ticker = tradeForm.ticker.toUpperCase();
                       const url = `https://finance.yahoo.com/quote/${ticker}/history/`;
                       window.open(url, "_blank");
-                      setPriceError(
-                        `Look up ${tradeForm.date} opening price for ${ticker}, then enter below`
-                      );
-                    }
-                  }}
-                  disabled={!tradeForm.ticker}
-                  className="w-full py-2.5 text-sm font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                >
-                  Lookup Price on Yahoo Finance ↗
-                </button>
-                {tradeForm.price && (
-                  <button
-                    onClick={() => {
-                      const price = parseFloat(tradeForm.price);
-                      if (price > 0) {
-                        const shares = Math.floor(
-                          DEFAULT_POSITION_SIZE / price
-                        );
-                        setTradeForm((prev) => ({
-                          ...prev,
-                          shares: shares.toString(),
-                        }));
-                      }
                     }}
                     className="w-full py-2 text-sm font-medium bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors"
                   >
-                    Calculate $20k Position (
-                    {tradeForm.price
-                      ? Math.floor(
-                          DEFAULT_POSITION_SIZE / parseFloat(tradeForm.price)
-                        ) + " shares"
-                      : ""}
-                    )
+                    View on Yahoo Finance ↗
                   </button>
                 )}
+                {tradeForm.type === "sell" && tradeForm.playerId && tradeForm.ticker && (() => {
+                  const positions = getPlayerPositions(tradeForm.playerId, trades);
+                  const position = positions.find(p => p.ticker === tradeForm.ticker.toUpperCase());
+                  if (position) {
+                    return (
+                      <button
+                        onClick={() =>
+                          setTradeForm((prev) => ({
+                            ...prev,
+                            shares: position.shares.toString(),
+                          }))
+                        }
+                        className="w-full py-2 text-sm font-medium bg-red-50 text-red-700 rounded-lg hover:bg-red-100 transition-colors"
+                      >
+                        Sell All {position.shares} shares
+                      </button>
+                    );
+                  }
+                  return null;
+                })()}
               </div>
+              {tradeForm.price && !tradeForm.shares && tradeForm.playerId && (() => {
+                const price = parseFloat(tradeForm.price);
+                if (price <= 0) return null;
+                if (tradeForm.type === "sell") {
+                  const positions = getPlayerPositions(tradeForm.playerId, trades);
+                  const position = positions.find(p => p.ticker === tradeForm.ticker.toUpperCase());
+                  if (position) {
+                    return (
+                      <button
+                        onClick={() =>
+                          setTradeForm((prev) => ({ ...prev, shares: position.shares.toString() }))
+                        }
+                        className="w-full py-2 text-sm font-medium bg-green-100 text-green-700 rounded-lg hover:bg-green-200 transition-colors"
+                      >
+                        Calculate: Sell all {position.shares} shares
+                      </button>
+                    );
+                  }
+                } else {
+                  const stats = getPlayerStats(tradeForm.playerId, trades, currentPrices);
+                  const budget = Math.min(DEFAULT_POSITION_SIZE, stats.cashRemaining);
+                  const shares = Math.floor(budget / price);
+                  return (
+                    <button
+                      onClick={() =>
+                        setTradeForm((prev) => ({ ...prev, shares: shares.toString() }))
+                      }
+                      className="w-full py-2 text-sm font-medium bg-green-100 text-green-700 rounded-lg hover:bg-green-200 transition-colors"
+                    >
+                      Calculate: {shares} shares ({formatCurrency(budget)} budget)
+                    </button>
+                  );
+                }
+                return null;
+              })()}
               {priceError && (
                 <p className="text-sm text-blue-600">{priceError}</p>
               )}
