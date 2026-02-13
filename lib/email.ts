@@ -6,7 +6,9 @@ import {
   type LeaderboardEntry,
   getLeaderboard,
   getPlayerStats,
+  getPlayerValueAtDate,
   getCurrentPrice,
+  getPriceAtDate,
   formatCurrency,
   formatPercent,
 } from "@/lib/contest";
@@ -38,6 +40,7 @@ export interface WeeklyReportData {
   players: Player[];
   trades: Trade[];
   currentPrices: Record<string, number>;
+  priceHistory: Record<string, Record<string, number>>;
   reportDate: string;
 }
 
@@ -58,6 +61,7 @@ export function buildReportData(
   players: Player[],
   trades: Trade[],
   currentPrices: Record<string, number>,
+  priceHistory: Record<string, Record<string, number>> = {},
   asOfDate?: string
 ): WeeklyReportData {
   const reportDate = asOfDate || new Date().toISOString().split("T")[0];
@@ -68,7 +72,8 @@ export function buildReportData(
 
   const currentLeaderboard = getLeaderboard(players, trades, currentPrices);
 
-  // Compute previous week's leaderboard using only trades before the cutoff
+  // Compute previous week's rankings using trades before cutoff, valued at current prices
+  // (used only for rank change detection — rank is relative ordering, not dollar values)
   const previousTrades = trades.filter((t) => t.date < cutoff);
   const previousLeaderboard = getLeaderboard(players, previousTrades, currentPrices);
 
@@ -77,7 +82,8 @@ export function buildReportData(
     const previousRank = previous
       ? previousLeaderboard.indexOf(previous)
       : currentRank;
-    const prevValue = previous?.totalValue ?? current.totalValue;
+    // Use getPlayerValueAtDate for true historical portfolio value
+    const prevValue = getPlayerValueAtDate(current.id, cutoff, trades, priceHistory);
     const weekChange = current.totalValue - prevValue;
     return {
       playerId: current.id,
@@ -98,6 +104,7 @@ export function buildReportData(
     players,
     trades,
     currentPrices,
+    priceHistory,
     reportDate,
   };
 }
@@ -126,7 +133,12 @@ const BANNED_WORDS = [
 ];
 
 export function buildCommentaryPrompt(data: WeeklyReportData): string {
-  const { leaderboard, weeklyTrades, weekDeltas, players, currentPrices, trades, reportDate } = data;
+  const { leaderboard, weeklyTrades, weekDeltas, players, currentPrices, priceHistory, trades, reportDate } = data;
+
+  const now = new Date(reportDate);
+  const oneWeekAgo = new Date(now);
+  oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+  const cutoffDate = oneWeekAgo.toISOString().split("T")[0];
 
   const standingsSummary = leaderboard
     .map((p, i) => {
@@ -138,7 +150,15 @@ export function buildCommentaryPrompt(data: WeeklyReportData): string {
           const currentValue = pos.shares * curPrice;
           const gain = currentValue - deployed;
           const gainPct = deployed !== 0 ? (gain / deployed) * 100 : 0;
-          return `${pos.ticker}: ${pos.shares} shares, ${formatCurrency(deployed)} deployed, now worth ${formatCurrency(currentValue)} (${gain >= 0 ? "+" : ""}${formatPercent(gainPct)})`;
+          // Weekly price change from historical prices
+          const weekAgoPrice = getPriceAtDate(pos.ticker, cutoffDate, priceHistory);
+          const weekPriceChange = weekAgoPrice && weekAgoPrice > 0
+            ? ((curPrice - weekAgoPrice) / weekAgoPrice) * 100
+            : null;
+          const weekStr = weekPriceChange !== null
+            ? `, ${weekPriceChange >= 0 ? "+" : ""}${formatPercent(weekPriceChange)} this week`
+            : "";
+          return `${pos.ticker}: ${pos.shares} shares, ${formatCurrency(deployed)} deployed, now worth ${formatCurrency(currentValue)} (${gain >= 0 ? "+" : ""}${formatPercent(gainPct)} total${weekStr})`;
         })
         .join("; ");
       const weekChangeStr = delta
@@ -186,6 +206,7 @@ Eli opened a GOOG position at $180, putting $18,000 to work from his $82,000 cas
 STRICT RULES:
 - Use specific numbers from the data (dollar amounts, percentages, share counts)
 - Position size = total dollars deployed, NOT per-share price. A 100-share position at $50/share ($5,000 deployed) is smaller than a 10-share position at $1,000/share ($10,000 deployed). The "deployed" amounts in the data are authoritative.
+- CRITICAL: "% total" is the gain since purchase. "% this week" is the actual price movement over the past 7 days. When discussing weekly performance, ONLY use the "this week" numbers. Never present total return as a weekly move.
 - Do NOT use any of these words/phrases: ${BANNED_WORDS.map((w) => `"${w}"`).join(", ")}
 - Never use the "it's not X, it's Y" rhetorical construction
 - No flattery, no superlatives, no glazing -- just state what happened

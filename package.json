@@ -8,7 +8,11 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "email:send": "bash scripts/weekly-email.sh",
+    "email:install": "cp scripts/com.stockcontest.weekly-email.plist ~/Library/LaunchAgents/ && launchctl load ~/Library/LaunchAgents/com.stockcontest.weekly-email.plist && echo 'Installed and loaded.'",
+    "email:uninstall": "launchctl unload ~/Library/LaunchAgents/com.stockcontest.weekly-email.plist 2>/dev/null; rm -f ~/Library/LaunchAgents/com.stockcontest.weekly-email.plist && echo 'Uninstalled.'",
+    "email:status": "launchctl list com.stockcontest.weekly-email 2>/dev/null || echo 'Not loaded.'"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.74.0",

@@ -71,7 +71,7 @@ describe("buildReportData", () => {
   const currentPrices = { AAPL: 55 };
 
   it("returns correct structure", () => {
-    const data = buildReportData(players, trades, currentPrices, "2026-02-10");
+    const data = buildReportData(players, trades, currentPrices, {}, "2026-02-10");
     expect(data.reportDate).toBe("2026-02-10");
     expect(data.leaderboard).toHaveLength(3);
     expect(data.weeklyTrades).toHaveLength(1);
@@ -81,7 +81,7 @@ describe("buildReportData", () => {
   });
 
   it("leaderboard is sorted by return", () => {
-    const data = buildReportData(players, trades, currentPrices, "2026-02-10");
+    const data = buildReportData(players, trades, currentPrices, {}, "2026-02-10");
     // p1 has a position with a gain, should be first
     expect(data.leaderboard[0].name).toBe("Daddy");
   });
@@ -92,18 +92,37 @@ describe("buildReportData", () => {
     // current leaderboard: p1 bought 100 shares at $50, now worth $55 each
     // p1 total value = $95,000 cash + $5,500 = $100,500
     // week change = $100,500 - $100,000 = $500
-    const data = buildReportData(players, trades, currentPrices, "2026-02-10");
+    const data = buildReportData(players, trades, currentPrices, {}, "2026-02-10");
     const daddyDelta = data.weekDeltas.find((d) => d.name === "Daddy");
     expect(daddyDelta).toBeDefined();
     expect(daddyDelta!.weekChange).toBe(500);
     expect(daddyDelta!.weekChangePct).toBeCloseTo(0.5, 1);
   });
 
+  it("uses historical prices for week deltas when priceHistory provided", () => {
+    // Player bought 100 shares of AAPL at $50 on Feb 1 (before cutoff)
+    // Cutoff for Feb 10 report = Feb 3
+    // Price on Feb 3 was $52, current price is $55
+    // Previous value: $95,000 cash + 100 * $52 = $100,200
+    // Current value: $95,000 cash + 100 * $55 = $100,500
+    // Week change should be $300, not $500
+    const earlyTrades = [
+      makeTrade({ playerId: "p1", ticker: "AAPL", date: "2026-02-01" }),
+    ];
+    const prices = { AAPL: 55 };
+    const history = { AAPL: { "2026-02-01": 50, "2026-02-03": 52 } };
+    const data = buildReportData(players, earlyTrades, prices, history, "2026-02-10");
+    const daddyDelta = data.weekDeltas.find((d) => d.name === "Daddy");
+    expect(daddyDelta).toBeDefined();
+    expect(daddyDelta!.weekChange).toBe(300);
+    expect(daddyDelta!.weekChangePct).toBeCloseTo(0.2994, 1);
+  });
+
   it("detects rank changes", () => {
     // Before this week: all players at $100k, no trades -> tied
     // After: Daddy has a gain, others don't
     // Daddy should be rank 0 now. Before, all were effectively tied.
-    const data = buildReportData(players, trades, currentPrices, "2026-02-10");
+    const data = buildReportData(players, trades, currentPrices, {}, "2026-02-10");
     const daddyDelta = data.weekDeltas.find((d) => d.name === "Daddy");
     expect(daddyDelta).toBeDefined();
     // Daddy moved up or stayed (exact rank depends on sort stability for ties)
@@ -124,7 +143,7 @@ describe("buildCommentaryPrompt", () => {
   const currentPrices = { AAPL: 55, GOOG: 190 };
 
   it("includes player standings and trade data", () => {
-    const data = buildReportData(players, trades, currentPrices, "2026-02-10");
+    const data = buildReportData(players, trades, currentPrices, {}, "2026-02-10");
     const prompt = buildCommentaryPrompt(data);
 
     expect(prompt).toContain("Daddy");
@@ -136,7 +155,7 @@ describe("buildCommentaryPrompt", () => {
   });
 
   it("includes banned words list", () => {
-    const data = buildReportData(players, trades, currentPrices, "2026-02-10");
+    const data = buildReportData(players, trades, currentPrices, {}, "2026-02-10");
     const prompt = buildCommentaryPrompt(data);
 
     expect(prompt).toContain("delve");
@@ -145,7 +164,7 @@ describe("buildCommentaryPrompt", () => {
   });
 
   it("specifies hedge fund letter tone", () => {
-    const data = buildReportData(players, trades, currentPrices, "2026-02-10");
+    const data = buildReportData(players, trades, currentPrices, {}, "2026-02-10");
     const prompt = buildCommentaryPrompt(data);
 
     expect(prompt).toContain("investor letter");
@@ -154,7 +173,7 @@ describe("buildCommentaryPrompt", () => {
   });
 
   it("includes week-over-week change data", () => {
-    const data = buildReportData(players, trades, currentPrices, "2026-02-10");
+    const data = buildReportData(players, trades, currentPrices, {}, "2026-02-10");
     const prompt = buildCommentaryPrompt(data);
 
     expect(prompt).toContain("Week:");
@@ -163,10 +182,20 @@ describe("buildCommentaryPrompt", () => {
   });
 
   it("includes example output", () => {
-    const data = buildReportData(players, trades, currentPrices, "2026-02-10");
+    const data = buildReportData(players, trades, currentPrices, {}, "2026-02-10");
     const prompt = buildCommentaryPrompt(data);
 
     expect(prompt).toContain("EXAMPLE:");
+  });
+
+  it("includes weekly price change when priceHistory available", () => {
+    const history = { AAPL: { "2026-02-03": 50 }, GOOG: { "2026-02-03": 180 } };
+    const data = buildReportData(players, trades, currentPrices, history, "2026-02-10");
+    const prompt = buildCommentaryPrompt(data);
+
+    // AAPL: was $50, now $55 = +10% this week
+    expect(prompt).toContain("this week");
+    expect(prompt).toContain("total");
   });
 });
 
@@ -204,7 +233,7 @@ describe("buildEmailHtml", () => {
   const currentPrices = { AAPL: 55, GOOG: 190 };
 
   it("returns valid HTML with all sections", () => {
-    const data = buildReportData(players, trades, currentPrices, "2026-02-10");
+    const data = buildReportData(players, trades, currentPrices, {}, "2026-02-10");
     const html = buildEmailHtml(data, "This is the weekly commentary.");
 
     expect(html).toContain("<!DOCTYPE html>");
@@ -214,14 +243,14 @@ describe("buildEmailHtml", () => {
   });
 
   it("includes commentary text", () => {
-    const data = buildReportData(players, trades, currentPrices, "2026-02-10");
+    const data = buildReportData(players, trades, currentPrices, {}, "2026-02-10");
     const html = buildEmailHtml(data, "Daddy is crushing it this week.");
 
     expect(html).toContain("Daddy is crushing it this week.");
   });
 
   it("includes leaderboard with player names", () => {
-    const data = buildReportData(players, trades, currentPrices, "2026-02-10");
+    const data = buildReportData(players, trades, currentPrices, {}, "2026-02-10");
     const html = buildEmailHtml(data, "Commentary.");
 
     expect(html).toContain("Leaderboard");
@@ -231,7 +260,7 @@ describe("buildEmailHtml", () => {
   });
 
   it("includes trade details", () => {
-    const data = buildReportData(players, trades, currentPrices, "2026-02-10");
+    const data = buildReportData(players, trades, currentPrices, {}, "2026-02-10");
     const html = buildEmailHtml(data, "Commentary.");
 
     expect(html).toContain("AAPL");
@@ -240,7 +269,7 @@ describe("buildEmailHtml", () => {
   });
 
   it("includes portfolio details with positions", () => {
-    const data = buildReportData(players, trades, currentPrices, "2026-02-10");
+    const data = buildReportData(players, trades, currentPrices, {}, "2026-02-10");
     const html = buildEmailHtml(data, "Commentary.");
 
     expect(html).toContain("Portfolio Details");
@@ -250,14 +279,14 @@ describe("buildEmailHtml", () => {
   });
 
   it("shows 'No trades this week' when no weekly trades", () => {
-    const data = buildReportData(players, trades, currentPrices, "2026-01-01");
+    const data = buildReportData(players, trades, currentPrices, {}, "2026-01-01");
     const html = buildEmailHtml(data, "Commentary.");
 
     expect(html).toContain("No trades this week");
   });
 
   it("shows green/red colors for gains/losses", () => {
-    const data = buildReportData(players, trades, currentPrices, "2026-02-10");
+    const data = buildReportData(players, trades, currentPrices, {}, "2026-02-10");
     const html = buildEmailHtml(data, "Commentary.");
 
     // AAPL has a gain (bought at 50, current 55), should show green
@@ -265,7 +294,7 @@ describe("buildEmailHtml", () => {
   });
 
   it("converts markdown bold to strong tags in commentary", () => {
-    const data = buildReportData(players, trades, currentPrices, "2026-02-10");
+    const data = buildReportData(players, trades, currentPrices, {}, "2026-02-10");
     const html = buildEmailHtml(data, "This is **really bold** stuff.");
 
     expect(html).toContain("<strong>really bold</strong>");
@@ -273,7 +302,7 @@ describe("buildEmailHtml", () => {
   });
 
   it("includes week change indicators", () => {
-    const data = buildReportData(players, trades, currentPrices, "2026-02-10");
+    const data = buildReportData(players, trades, currentPrices, {}, "2026-02-10");
     const html = buildEmailHtml(data, "Commentary.");
 
     // Should contain up/down triangle arrows
@@ -281,14 +310,14 @@ describe("buildEmailHtml", () => {
   });
 
   it("includes gradient header", () => {
-    const data = buildReportData(players, trades, currentPrices, "2026-02-10");
+    const data = buildReportData(players, trades, currentPrices, {}, "2026-02-10");
     const html = buildEmailHtml(data, "Commentary.");
 
     expect(html).toContain("linear-gradient");
   });
 
   it("includes gain/loss progress bars in portfolio details", () => {
-    const data = buildReportData(players, trades, currentPrices, "2026-02-10");
+    const data = buildReportData(players, trades, currentPrices, {}, "2026-02-10");
     const html = buildEmailHtml(data, "Commentary.");
 
     // AAPL has a 10% gain, should show a bar
@@ -310,7 +339,7 @@ describe("buildPlainText", () => {
   const currentPrices = { AAPL: 55, GOOG: 190 };
 
   it("returns plain text without HTML tags", () => {
-    const data = buildReportData(players, trades, currentPrices, "2026-02-10");
+    const data = buildReportData(players, trades, currentPrices, {}, "2026-02-10");
     const text = buildPlainText(data, "Commentary paragraph.");
 
     expect(text).not.toContain("<");
@@ -318,14 +347,14 @@ describe("buildPlainText", () => {
   });
 
   it("includes commentary text", () => {
-    const data = buildReportData(players, trades, currentPrices, "2026-02-10");
+    const data = buildReportData(players, trades, currentPrices, {}, "2026-02-10");
     const text = buildPlainText(data, "Daddy is crushing it.");
 
     expect(text).toContain("Daddy is crushing it.");
   });
 
   it("includes leaderboard data", () => {
-    const data = buildReportData(players, trades, currentPrices, "2026-02-10");
+    const data = buildReportData(players, trades, currentPrices, {}, "2026-02-10");
     const text = buildPlainText(data, "Commentary.");
 
     expect(text).toContain("Daddy");
@@ -335,7 +364,7 @@ describe("buildPlainText", () => {
   });
 
   it("strips markdown formatting", () => {
-    const data = buildReportData(players, trades, currentPrices, "2026-02-10");
+    const data = buildReportData(players, trades, currentPrices, {}, "2026-02-10");
     const text = buildPlainText(data, "This is **bold** and *italic*.");
 
     expect(text).toContain("This is bold and italic.");
@@ -344,7 +373,7 @@ describe("buildPlainText", () => {
   });
 
   it("includes trade details", () => {
-    const data = buildReportData(players, trades, currentPrices, "2026-02-10");
+    const data = buildReportData(players, trades, currentPrices, {}, "2026-02-10");
     const text = buildPlainText(data, "Commentary.");
 
     expect(text).toContain("AAPL");
@@ -353,7 +382,7 @@ describe("buildPlainText", () => {
   });
 
   it("includes portfolio details with positions", () => {
-    const data = buildReportData(players, trades, currentPrices, "2026-02-10");
+    const data = buildReportData(players, trades, currentPrices, {}, "2026-02-10");
     const text = buildPlainText(data, "Commentary.");
 
     expect(text).toContain("PORTFOLIO DETAILS");

@@ -15,6 +15,7 @@ export async function POST(request: Request) {
     const trades = contestData.trades as Trade[];
     const {
       currentPrices,
+      priceHistory,
       gmailAddress,
       gmailAppPassword,
       anthropicApiKey,
@@ -41,7 +42,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const reportData = buildReportData(players, trades, currentPrices);
+    const reportData = buildReportData(players, trades, currentPrices, priceHistory);
 
     // Use pre-generated commentary from preview page, or generate fresh
     const commentary =

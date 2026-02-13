@@ -12,7 +12,7 @@ export async function POST() {
     const contestData = getContestData();
     const players = contestData.players as Player[];
     const trades = contestData.trades as Trade[];
-    const { currentPrices, anthropicApiKey } = contestData;
+    const { currentPrices, priceHistory, anthropicApiKey } = contestData;
 
     if (!anthropicApiKey) {
       return NextResponse.json(
@@ -21,7 +21,7 @@ export async function POST() {
       );
     }
 
-    const reportData = buildReportData(players, trades, currentPrices);
+    const reportData = buildReportData(players, trades, currentPrices, priceHistory);
     const commentary = await generateCommentary(reportData, anthropicApiKey);
     const html = buildEmailHtml(reportData, commentary);
 
