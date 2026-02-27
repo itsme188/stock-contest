@@ -11,6 +11,7 @@ export interface ContestData {
   gmailAddress: string;
   gmailAppPassword: string;
   anthropicApiKey: string;
+  aiModel: string;
   playerEmails: Record<string, string>;
 }
 
@@ -42,6 +43,7 @@ const DEFAULTS: ContestData = {
   gmailAddress: "",
   gmailAppPassword: "",
   anthropicApiKey: "",
+  aiModel: "claude-sonnet-4-5-20250929",
   playerEmails: {},
 };
 
@@ -79,6 +81,8 @@ export function getContestData(): ContestData {
       (data.gmailAppPassword as string) ?? DEFAULTS.gmailAppPassword,
     anthropicApiKey:
       (data.anthropicApiKey as string) ?? DEFAULTS.anthropicApiKey,
+    aiModel:
+      (data.aiModel as string) ?? DEFAULTS.aiModel,
     playerEmails:
       (data.playerEmails as Record<string, string>) ?? DEFAULTS.playerEmails,
   };

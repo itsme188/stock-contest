@@ -19,6 +19,7 @@ export async function POST(request: Request) {
       gmailAddress,
       gmailAppPassword,
       anthropicApiKey,
+      aiModel,
       playerEmails,
     } = contestData;
 
@@ -47,7 +48,7 @@ export async function POST(request: Request) {
     // Use pre-generated commentary from preview page, or generate fresh
     const commentary =
       (body as { commentary?: string }).commentary ||
-      (await generateCommentary(reportData, anthropicApiKey));
+      (await generateCommentary(reportData, anthropicApiKey, aiModel));
 
     await sendWeeklyEmail(
       { gmailAddress, gmailAppPassword, anthropicApiKey, playerEmails },

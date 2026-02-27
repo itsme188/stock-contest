@@ -22,6 +22,8 @@ interface SettingsTabProps {
   setGmailAppPassword: (pw: string) => void;
   anthropicApiKey: string;
   setAnthropicApiKey: (key: string) => void;
+  aiModel: string;
+  setAiModel: (model: string) => void;
   playerEmails: Record<string, string>;
   setPlayerEmails: React.Dispatch<React.SetStateAction<Record<string, string>>>;
   players: Player[];
@@ -43,6 +45,8 @@ export default function SettingsTab({
   setGmailAppPassword,
   anthropicApiKey,
   setAnthropicApiKey,
+  aiModel,
+  setAiModel,
   playerEmails,
   setPlayerEmails,
   players,
@@ -202,6 +206,24 @@ export default function SettingsTab({
             </p>
           </div>
 
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              AI Model
+            </label>
+            <select
+              value={aiModel}
+              onChange={(e) => setAiModel(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+            >
+              <option value="claude-sonnet-4-5-20250929">Claude Sonnet 4.5 (recommended)</option>
+              <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5 (fast, cheaper)</option>
+              <option value="claude-opus-4-6">Claude Opus 4.6 (most capable)</option>
+            </select>
+            <p className="text-xs text-gray-500 mt-1">
+              Model used for AI commentary in weekly emails
+            </p>
+          </div>
+
           <div className="pt-2 border-t border-gray-100">
             <label className="block text-sm font-medium text-gray-700 mb-2">
               Player Email Addresses
@@ -327,7 +349,7 @@ export default function SettingsTab({
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Position Limits
             </label>
-            <p className="text-gray-600">3-5 positions per player</p>
+            <p className="text-gray-600">Maximum 5 positions per player</p>
           </div>
         </div>
       </div>

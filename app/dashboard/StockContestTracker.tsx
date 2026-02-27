@@ -7,6 +7,7 @@ import {
   type TradeForm,
   COLORS,
   DEFAULT_POSITION_SIZE,
+  getLastSaleProceeds,
   getLeaderboard,
   getPerformanceChartData,
   getPlayerPositions,
@@ -39,8 +40,10 @@ export default function StockContestTracker() {
   const [gmailAddress, setGmailAddress] = useState("");
   const [gmailAppPassword, setGmailAppPassword] = useState("");
   const [anthropicApiKey, setAnthropicApiKey] = useState("");
+  const [aiModel, setAiModel] = useState("claude-sonnet-4-5-20250929");
   const [playerEmails, setPlayerEmails] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const [tradeForm, setTradeForm] = useState<TradeForm>({
     playerId: "",
@@ -71,6 +74,7 @@ export default function StockContestTracker() {
         if (data.gmailAddress) setGmailAddress(data.gmailAddress);
         if (data.gmailAppPassword) setGmailAppPassword(data.gmailAppPassword);
         if (data.anthropicApiKey) setAnthropicApiKey(data.anthropicApiKey);
+        if (data.aiModel) setAiModel(data.aiModel);
         if (data.playerEmails && Object.keys(data.playerEmails).length)
           setPlayerEmails(data.playerEmails);
         loaded.current = true;
@@ -78,6 +82,7 @@ export default function StockContestTracker() {
       })
       .catch((err) => {
         console.error("Failed to load contest data:", err);
+        setLoadError("Failed to load contest data. Check that the server is running.");
         setLoading(false);
         loaded.current = true;
       });
@@ -101,11 +106,12 @@ export default function StockContestTracker() {
           gmailAddress,
           gmailAppPassword,
           anthropicApiKey,
+          aiModel,
           playerEmails,
         }),
       }).catch((err) => console.error("Failed to save contest data:", err));
     }, 500);
-  }, [players, trades, contestStartDate, polygonApiKey, currentPrices, priceHistory, gmailAddress, gmailAppPassword, anthropicApiKey, playerEmails]);
+  }, [players, trades, contestStartDate, polygonApiKey, currentPrices, priceHistory, gmailAddress, gmailAppPassword, anthropicApiKey, aiModel, playerEmails]);
 
   useEffect(() => {
     saveToApi();
@@ -199,7 +205,9 @@ export default function StockContestTracker() {
         }
       } else if (tradeForm.playerId) {
         const stats = getPlayerStats(tradeForm.playerId, trades, currentPrices);
-        const budget = Math.min(DEFAULT_POSITION_SIZE, stats.cashRemaining);
+        const lastSaleProceeds = getLastSaleProceeds(tradeForm.playerId, trades);
+        const targetBudget = lastSaleProceeds ?? DEFAULT_POSITION_SIZE;
+        const budget = Math.min(targetBudget, stats.cashRemaining);
         const shares = Math.floor(budget / price);
         setTradeForm((prev) => ({ ...prev, shares: shares.toString() }));
       } else {
@@ -364,6 +372,20 @@ export default function StockContestTracker() {
         </div>
       </div>
 
+      {loadError && (
+        <div className="max-w-7xl mx-auto px-4 pt-4">
+          <div className="bg-red-50 border border-red-200 rounded-lg p-4 flex items-center justify-between">
+            <p className="text-red-700 text-sm">{loadError}</p>
+            <button
+              onClick={() => window.location.reload()}
+              className="px-3 py-1 text-sm bg-red-100 text-red-700 rounded hover:bg-red-200 transition-colors"
+            >
+              Retry
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="max-w-7xl mx-auto px-4 py-6">
         {activeTab === "dashboard" && (
           <DashboardTab
@@ -428,6 +450,8 @@ export default function StockContestTracker() {
             setGmailAppPassword={setGmailAppPassword}
             anthropicApiKey={anthropicApiKey}
             setAnthropicApiKey={setAnthropicApiKey}
+            aiModel={aiModel}
+            setAiModel={setAiModel}
             playerEmails={playerEmails}
             setPlayerEmails={setPlayerEmails}
             players={players}

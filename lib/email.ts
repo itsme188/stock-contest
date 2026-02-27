@@ -221,11 +221,12 @@ ${recentTradesSummary}`;
 
 export async function generateCommentary(
   data: WeeklyReportData,
-  anthropicApiKey: string
+  anthropicApiKey: string,
+  model: string = "claude-sonnet-4-5-20250929"
 ): Promise<string> {
   const client = new Anthropic({ apiKey: anthropicApiKey });
   const message = await client.messages.create({
-    model: "claude-sonnet-4-20250514",
+    model,
     max_tokens: 500,
     messages: [{ role: "user", content: buildCommentaryPrompt(data) }],
   });

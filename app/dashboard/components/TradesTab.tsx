@@ -3,6 +3,7 @@ import {
   type Trade,
   type TradeForm,
   DEFAULT_POSITION_SIZE,
+  getLastSaleProceeds,
   getOpenPositionCount,
   getPlayerPositions,
   getPlayerStats,
@@ -245,8 +246,11 @@ export default function TradesTab({
                   }
                 } else {
                   const stats = getPlayerStats(tradeForm.playerId, trades, currentPrices);
-                  const budget = Math.min(DEFAULT_POSITION_SIZE, stats.cashRemaining);
+                  const lastSaleProceeds = getLastSaleProceeds(tradeForm.playerId, trades);
+                  const targetBudget = lastSaleProceeds ?? DEFAULT_POSITION_SIZE;
+                  const budget = Math.min(targetBudget, stats.cashRemaining);
                   const shares = Math.floor(budget / price);
+                  const budgetLabel = lastSaleProceeds ? "from last sale" : "budget";
                   return (
                     <button
                       onClick={() =>
@@ -254,7 +258,7 @@ export default function TradesTab({
                       }
                       className="w-full py-2 text-sm font-medium bg-green-100 text-green-700 rounded-lg hover:bg-green-200 transition-colors"
                     >
-                      Calculate: {shares} shares ({formatCurrency(budget)} budget)
+                      Calculate: {shares} shares ({formatCurrency(budget)} {budgetLabel})
                     </button>
                   );
                 }

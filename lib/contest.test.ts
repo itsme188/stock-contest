@@ -6,6 +6,7 @@ import {
   canAddPosition,
   getLatestTradePrice,
   getCurrentPrice,
+  getLastSaleProceeds,
   getPlayerStats,
   getLeaderboard,
   getPriceAtDate,
@@ -935,5 +936,44 @@ describe("formatPercent", () => {
 
   it("formats zero with + prefix", () => {
     expect(formatPercent(0)).toBe("+0.00%");
+  });
+});
+
+// --- getLastSaleProceeds ---
+
+describe("getLastSaleProceeds", () => {
+  it("returns null when no trades exist", () => {
+    expect(getLastSaleProceeds(PLAYER_A, [])).toBeNull();
+  });
+
+  it("returns null when last trade was a buy", () => {
+    const trades = [
+      makeTrade({ playerId: PLAYER_A, type: "buy", ticker: "AAPL", shares: 100, price: 150, date: "2026-01-15" }),
+    ];
+    expect(getLastSaleProceeds(PLAYER_A, trades)).toBeNull();
+  });
+
+  it("returns proceeds when last trade was a sell", () => {
+    const trades = [
+      makeTrade({ playerId: PLAYER_A, type: "buy", ticker: "AAPL", shares: 100, price: 150, date: "2026-01-10" }),
+      makeTrade({ playerId: PLAYER_A, type: "sell", ticker: "AAPL", shares: 100, price: 160, date: "2026-01-20" }),
+    ];
+    expect(getLastSaleProceeds(PLAYER_A, trades)).toBe(16000);
+  });
+
+  it("ignores other players' trades", () => {
+    const trades = [
+      makeTrade({ playerId: PLAYER_A, type: "buy", ticker: "AAPL", shares: 100, price: 150, date: "2026-01-10" }),
+      makeTrade({ playerId: PLAYER_B, type: "sell", ticker: "GOOG", shares: 50, price: 200, date: "2026-01-20" }),
+    ];
+    expect(getLastSaleProceeds(PLAYER_A, trades)).toBeNull();
+  });
+
+  it("uses the most recent trade by timestamp", () => {
+    const trades = [
+      makeTrade({ playerId: PLAYER_A, type: "sell", ticker: "AAPL", shares: 100, price: 160, date: "2026-01-15" }),
+      makeTrade({ playerId: PLAYER_A, type: "buy", ticker: "GOOG", shares: 50, price: 200, date: "2026-01-20" }),
+    ];
+    expect(getLastSaleProceeds(PLAYER_A, trades)).toBeNull();
   });
 });

@@ -45,6 +45,7 @@ export default function DashboardTab({
 }: DashboardTabProps) {
   const [refreshing, setRefreshing] = useState(false);
   const [refreshStatus, setRefreshStatus] = useState("");
+  const [lastRefreshed, setLastRefreshed] = useState<string | null>(null);
 
   const refreshAllPrices = async () => {
     setRefreshing(true);
@@ -73,6 +74,7 @@ export default function DashboardTab({
         const count = Object.keys(data.updated).length;
         const msg = `Updated ${count} price${count !== 1 ? "s" : ""}`;
         setRefreshStatus(data.errors?.length ? `${msg} (${data.errors.length} failed)` : msg);
+        setLastRefreshed(new Date().toLocaleString());
       } else {
         setRefreshStatus(`Error: ${data.error}`);
       }
@@ -233,8 +235,9 @@ export default function DashboardTab({
           </div>
           {Object.keys(currentPrices).length > 0 && (
             <p className="text-xs text-gray-500 mt-3">
-              Last updated: {new Date().toLocaleDateString()}. Prices are saved
-              automatically.
+              {lastRefreshed
+                ? `Last refreshed: ${lastRefreshed}.`
+                : "Prices are saved automatically."}
             </p>
           )}
         </div>

@@ -169,6 +169,22 @@ export function getCurrentPrice(
   return currentPrices[ticker] || getLatestTradePrice(ticker, trades) || 0;
 }
 
+export function getLastSaleProceeds(
+  playerId: string,
+  trades: Trade[]
+): number | null {
+  const playerTrades = trades
+    .filter((t) => t.playerId === playerId)
+    .sort((a, b) => b.timestamp - a.timestamp);
+
+  if (playerTrades.length === 0) return null;
+
+  const lastTrade = playerTrades[0];
+  if (lastTrade.type !== "sell") return null;
+
+  return lastTrade.shares * lastTrade.price;
+}
+
 export function getPriceAtDate(
   ticker: string,
   date: string,
