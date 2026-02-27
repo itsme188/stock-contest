@@ -113,6 +113,17 @@ if ! prices_are_fresh "$PRICE_RESPONSE"; then
   fi
 fi
 
+# Backfill historical daily prices so week-over-week calculations are accurate
+log "Running price history backfill..."
+BACKFILL_RESPONSE=$(curl -sf --max-time "$PRICE_TIMEOUT" \
+  -X POST "${BASE_URL}/api/prices/backfill" \
+  -H "Content-Type: application/json" 2>&1) || {
+  log "WARNING: Price backfill failed (continuing anyway): ${BACKFILL_RESPONSE:-<empty>}"
+}
+if [ -n "$BACKFILL_RESPONSE" ]; then
+  log "Backfill response: ${BACKFILL_RESPONSE}"
+fi
+
 # Brief delay to let SQLite settle
 log "Waiting ${SLEEP_AFTER_PRICES}s before sending email..."
 sleep "$SLEEP_AFTER_PRICES"
