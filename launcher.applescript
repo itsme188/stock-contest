@@ -12,7 +12,5 @@ repeat 15 times
 	delay 2
 end repeat
 
-tell application "Safari"
-	activate
-	open location "http://localhost:3001"
-end tell
+-- Open in default browser (no Automation permission needed)
+do shell script "open 'http://localhost:3001'"
