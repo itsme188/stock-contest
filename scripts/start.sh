@@ -47,10 +47,22 @@ echo "Server will auto-restart on crash."
 echo "========================================"
 echo ""
 
+# Kill any stale process on port 3001
+kill_port() {
+    local pid
+    pid=$(lsof -ti:3001 2>/dev/null)
+    if [ -n "$pid" ]; then
+        echo -e "${YELLOW}Killing stale process on port 3001 (PID: $pid)${NC}"
+        kill $pid 2>/dev/null
+        sleep 1
+    fi
+}
+
 # Run the server with auto-restart on crash
-trap 'echo -e "\n${YELLOW}Shutting down...${NC}"; exit 0' INT TERM
+trap 'echo -e "\n${YELLOW}Shutting down...${NC}"; kill_port; exit 0' INT TERM
 
 while true; do
+    kill_port
     npx next dev --port 3001
     EXIT_CODE=$?
     if [ $EXIT_CODE -eq 0 ]; then
