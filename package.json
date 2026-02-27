@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.74.0",
+    "@stoqey/ib": "^1.5.3",
     "better-sqlite3": "^12.6.2",
     "next": "16.1.6",
     "nodemailer": "^8.0.1",

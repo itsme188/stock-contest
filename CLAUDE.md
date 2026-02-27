@@ -15,7 +15,7 @@ npm run lint       # ESLint check
 npm run test       # Run Vitest tests
 npm run test:watch # Vitest in watch mode
 npm run email:send      # Manually trigger price refresh + weekly email
-npm run email:install   # Install launchd job (Friday 4:10 PM)
+npm run email:install   # Install launchd job (Friday 4:20 PM)
 npm run email:uninstall # Remove launchd job
 npm run email:status    # Check if launchd job is loaded
 ```
@@ -28,8 +28,8 @@ npm run email:status    # Check if launchd job is loaded
 - **Storage**: SQLite via better-sqlite3 (server-side, `data/contest.db`)
 - **Email**: nodemailer (Gmail SMTP with App Password)
 - **AI**: @anthropic-ai/sdk (Claude Sonnet for weekly email commentary)
-- **Prices**: Polygon.io API (free tier, 5 calls/min)
-- **Testing**: Vitest (107 tests)
+- **Prices**: Polygon.io API (free tier, 5 calls/min) + IBKR TWS fallback via @stoqey/ib
+- **Testing**: Vitest (112 tests)
 
 ## Architecture
 
@@ -43,7 +43,8 @@ npm run email:status    # Check if launchd job is loaded
 ### API Routes
 - `GET/PUT /api/contest` — Full contest data persistence (SQLite)
 - `GET /api/prices?ticker=AAPL&date=2026-01-15` — Single ticker price fetch
-- `POST /api/prices/update` — Refresh all open ticker prices (batch, rate-limited)
+- `POST /api/prices/update` — Refresh all open ticker prices via Polygon (batch, rate-limited, returns `priceDates`)
+- `POST /api/prices/ibkr` — Refresh all open ticker prices via IBKR TWS (fallback, requires TWS running)
 - `POST /api/prices/backfill` — Bulk historical daily prices via Polygon range API
 - `POST /api/email/preview` — Generate email preview (AI commentary + rendered HTML, no send)
 - `POST /api/email/weekly` — Weekly email report with AI commentary (accepts optional pre-generated commentary)
@@ -102,17 +103,24 @@ Originally a single-file React app (Jan 14, 2026), ported to this Next.js projec
 
 **Feb 13**: Added automated weekly email via macOS launchd. Shell script (`scripts/weekly-email.sh`) refreshes prices then sends email every Friday at 4:10 PM. Install with `npm run email:install`, test with `npm run email:send`. Logs at `data/logs/weekly-email.log`. Fixed week-over-week calculations: was using current prices for previous-week valuation (players with no trades showed $0 change), now uses `getPlayerValueAtDate()` with `priceHistory` for true historical values. Added per-position weekly price changes to AI prompt (distinguishes "% total" from "% this week") so commentary no longer confuses cost-basis returns with weekly moves.
 
+**Feb 27**: Desktop launch experience (start.sh + AppleScript + .app bundle with 📈 icon), root page renders dashboard directly, code cleanup (ESLint, unused SVGs, README), fixed email script paths. Cherry-picked from gifted-meninsky: configurable AI model, context-aware position sizing, load error banner, last-refreshed timestamp.
+
+**Feb 27 (session 2)**: Fixed same-day pricing: Polygon `/prev` updates ~15 min after close but email was firing at 4:10 PM (too early). Moved to 4:20 PM, added staleness detection (checks `priceDates` from Polygon response), retry loop (2 retries, 5 min apart), and IBKR TWS fallback via `@stoqey/ib`. New `/api/prices/ibkr` endpoint + IBKR button on dashboard.
+
 Seed data: 3 players, 17 trades, prices through Jan 30 — load via Settings > Import from `data/stock-contest-2026-01-30.json`.
 
 ## Known Limitations
 
-- **Polygon.io free tier**: 5 API calls/min. Batch refresh takes ~1 min per 5 tickers. Trade form fetch shares the same quota. Long-term: consider paid tier or alternative API.
+- **Polygon.io free tier**: 5 API calls/min. Batch refresh takes ~1 min per 5 tickers. Trade form fetch shares the same quota.
+- **IBKR TWS fallback**: Requires Trader Workstation running on localhost:7496. Fails gracefully if TWS is not running.
 
 ## Lessons
 
 - **When decomposing UI into components, verify all functions are passed as props.** The `void functionName` pattern to suppress unused warnings is a red flag — it means the function was disconnected.
 - **Always provide a non-API fallback for user actions.** The trade form needs a manual "Calculate Shares" button that works without Polygon, since the API has strict rate limits.
-- **Polygon `/prev` endpoint returns yesterday's close, not today's open.** Always pass a date parameter to get opening prices for trade logging.
+- **Polygon `/prev` endpoint returns the most recently completed session's close.** It updates ~15 min after market close. Schedule automated jobs at least 20 min after close (4:20 PM+). Always pass a date parameter to get opening prices for trade logging.
+- **Return machine-readable metadata from API responses.** The Polygon update route now returns `priceDates` (bar dates) so callers can detect stale data programmatically instead of guessing.
+- **Layered fallbacks beat single-source dependencies.** Price fetching: Polygon (primary) → retry with delay → IBKR TWS (fallback). Each layer fails gracefully.
 - **Labels must match data.** "Portfolio Value" showing only positions (not cash) was confusing. Use precise labels: "Total Value" (cash+positions), "Cash", "Positions".
 - **Pre-compute everything for the AI — never make it do math.** Show `$19,888 deployed, now worth $20,500 (+3.07%)`, not `44 shares @ $452 avg cost`. The model will confuse per-share price with position size.
 - **When data can be misinterpreted, add an explicit rule.** Even with better data, add a strict rule like "Position size = total dollars deployed, NOT per-share price." Belt and suspenders.

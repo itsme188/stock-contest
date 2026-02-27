@@ -33,6 +33,7 @@ export async function POST() {
     }
 
     const updated: Record<string, number> = {};
+    const priceDates: Record<string, string> = {};
     const errors: string[] = [];
     const today = new Date().toISOString().split("T")[0];
 
@@ -52,7 +53,11 @@ export async function POST() {
             const data = await res.json();
 
             if (data.results?.[0]?.c) {
-              return { ticker, price: data.results[0].c };
+              // Extract bar date from Polygon timestamp (ms → YYYY-MM-DD)
+              const barDate = data.results[0].t
+                ? new Date(data.results[0].t).toISOString().split("T")[0]
+                : undefined;
+              return { ticker, price: data.results[0].c, barDate };
             }
             errors.push(`${ticker}: no price data`);
             return null;
@@ -66,6 +71,7 @@ export async function POST() {
       for (const result of results) {
         if (result) {
           updated[result.ticker] = result.price;
+          if (result.barDate) priceDates[result.ticker] = result.barDate;
         }
       }
     }
@@ -83,6 +89,7 @@ export async function POST() {
     return NextResponse.json({
       ok: true,
       updated,
+      priceDates,
       date: today,
       ...(errors.length > 0 && { errors }),
     });

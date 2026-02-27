@@ -44,37 +44,45 @@ export default function DashboardTab({
   polygonApiKey,
 }: DashboardTabProps) {
   const [refreshing, setRefreshing] = useState(false);
+  const [refreshSource, setRefreshSource] = useState<"polygon" | "ibkr" | null>(null);
   const [refreshStatus, setRefreshStatus] = useState("");
   const [lastRefreshed, setLastRefreshed] = useState<string | null>(null);
 
-  const refreshAllPrices = async () => {
+  const applyPriceUpdate = (data: { updated: Record<string, number>; date: string; errors?: string[] }, source: string) => {
+    setCurrentPrices((prev) => ({ ...prev, ...data.updated }));
+    const today = data.date;
+    setPriceHistory((prev) => {
+      const next = { ...prev };
+      for (const [ticker, price] of Object.entries(data.updated)) {
+        if (!next[ticker]) next[ticker] = {};
+        next[ticker] = { ...next[ticker], [today]: price };
+      }
+      return next;
+    });
+    const count = Object.keys(data.updated).length;
+    const msg = `Updated ${count} price${count !== 1 ? "s" : ""} via ${source}`;
+    setRefreshStatus(data.errors?.length ? `${msg} (${data.errors.length} failed)` : msg);
+    setLastRefreshed(new Date().toLocaleString());
+  };
+
+  const refreshPrices = async (source: "polygon" | "ibkr") => {
     setRefreshing(true);
-    const tickerCount = allOpenTickers.length;
-    const batches = Math.ceil(tickerCount / 5);
-    if (batches > 1) {
-      setRefreshStatus(`Fetching batch 1/${batches} (free tier: 5/min)...`);
+    setRefreshSource(source);
+    const endpoint = source === "ibkr" ? "/api/prices/ibkr" : "/api/prices/update";
+
+    if (source === "polygon") {
+      const tickerCount = allOpenTickers.length;
+      const batches = Math.ceil(tickerCount / 5);
+      setRefreshStatus(batches > 1 ? `Fetching batch 1/${batches} (free tier: 5/min)...` : "Fetching prices...");
     } else {
-      setRefreshStatus("Fetching prices...");
+      setRefreshStatus("Connecting to IBKR TWS...");
     }
+
     try {
-      const res = await fetch("/api/prices/update", { method: "POST" });
+      const res = await fetch(endpoint, { method: "POST" });
       const data = await res.json();
       if (res.ok) {
-        setCurrentPrices((prev) => ({ ...prev, ...data.updated }));
-        // Update priceHistory with today's prices
-        const today = data.date;
-        setPriceHistory((prev) => {
-          const next = { ...prev };
-          for (const [ticker, price] of Object.entries(data.updated as Record<string, number>)) {
-            if (!next[ticker]) next[ticker] = {};
-            next[ticker] = { ...next[ticker], [today]: price };
-          }
-          return next;
-        });
-        const count = Object.keys(data.updated).length;
-        const msg = `Updated ${count} price${count !== 1 ? "s" : ""}`;
-        setRefreshStatus(data.errors?.length ? `${msg} (${data.errors.length} failed)` : msg);
-        setLastRefreshed(new Date().toLocaleString());
+        applyPriceUpdate(data, source === "ibkr" ? "IBKR TWS" : "Polygon");
       } else {
         setRefreshStatus(`Error: ${data.error}`);
       }
@@ -82,6 +90,7 @@ export default function DashboardTab({
       setRefreshStatus(`Error: ${err instanceof Error ? err.message : err}`);
     } finally {
       setRefreshing(false);
+      setRefreshSource(null);
     }
   };
 
@@ -189,12 +198,20 @@ export default function DashboardTab({
                     setRefreshStatus("Add Polygon API key in Settings first");
                     return;
                   }
-                  refreshAllPrices();
+                  refreshPrices("polygon");
                 }}
                 disabled={refreshing}
                 className="px-3 py-1.5 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
-                {refreshing ? "Refreshing..." : "Refresh Prices"}
+                {refreshing && refreshSource === "polygon" ? "Refreshing..." : "Refresh Prices"}
+              </button>
+              <button
+                onClick={() => refreshPrices("ibkr")}
+                disabled={refreshing}
+                title="Fetch prices from IBKR Trader Workstation (must be running)"
+                className="px-3 py-1.5 text-sm bg-gray-700 text-white rounded-lg hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                {refreshing && refreshSource === "ibkr" ? "Connecting..." : "IBKR"}
               </button>
               <button
                 onClick={() => {
