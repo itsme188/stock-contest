@@ -18,7 +18,6 @@ interface TradesTabProps {
   showAddTrade: boolean;
   setShowAddTrade: (show: boolean) => void;
   priceError: string;
-  setPriceError: (error: string) => void;
   addTrade: () => void;
   deleteTrade: (id: string) => void;
   fetchingPrice: boolean;
@@ -34,7 +33,6 @@ export default function TradesTab({
   showAddTrade,
   setShowAddTrade,
   priceError,
-  setPriceError,
   addTrade,
   deleteTrade,
   fetchingPrice,

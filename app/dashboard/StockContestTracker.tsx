@@ -389,7 +389,6 @@ export default function StockContestTracker() {
             showAddTrade={showAddTrade}
             setShowAddTrade={setShowAddTrade}
             priceError={priceError}
-            setPriceError={setPriceError}
             addTrade={addTrade}
             deleteTrade={deleteTrade}
             fetchingPrice={fetchingPrice}
