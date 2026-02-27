@@ -29,7 +29,8 @@ npm run email:status    # Check if launchd job is loaded
 - **Email**: nodemailer (Gmail SMTP with App Password)
 - **AI**: @anthropic-ai/sdk (Claude Sonnet for weekly email commentary)
 - **Prices**: Polygon.io API (free tier, 5 calls/min) + IBKR TWS fallback via @stoqey/ib
-- **Testing**: Vitest (112 tests)
+- **Market Context**: Vital Knowledge email digests via IMAP (imapflow)
+- **Testing**: Vitest (138 tests)
 
 ## Architecture
 
@@ -54,6 +55,7 @@ npm run email:status    # Check if launchd job is loaded
 - `app/dashboard/components/` — DashboardTab, TradesTab, PlayersTab, SettingsTab
 - `lib/contest.ts` — Pure business logic (types, FIFO, P&L, stats, validation, chart data)
 - `lib/email.ts` — Email report logic (report data, week deltas, AI prompt, HTML/plain text templates, SMTP send)
+- `lib/vital-knowledge.ts` — Vital Knowledge email fetcher (IMAP, Gmail, market context for AI prompt)
 - `app/email/preview/page.tsx` — Email preview page (iframe preview, regenerate, send)
 - `app/api/prices/ibkr/route.ts` — IBKR TWS price fetcher (fallback, non-US ticker support via EXCHANGE_MAP)
 - `lib/db.ts` — SQLite connection, schema, CRUD
@@ -109,6 +111,8 @@ Originally a single-file React app (Jan 14, 2026), ported to this Next.js projec
 
 **Feb 27 (session 2)**: Fixed same-day pricing: Polygon `/prev` updates ~15 min after close but email was firing at 4:10 PM (too early). Moved to 4:20 PM, added staleness detection (checks `priceDates` from Polygon response), retry loop (2 retries, 5 min apart), and IBKR TWS fallback via `@stoqey/ib`. New `/api/prices/ibkr` endpoint + IBKR button on dashboard.
 
+**Feb 27 (session 3)**: Vital Knowledge integration. Auto-fetches VK market commentary emails from Gmail via IMAP (`imapflow`), injects into AI prompt so weekly email references real market conditions. New `lib/vital-knowledge.ts` (IMAP fetch, HTML stripping, MIME parsing, 23 tests). Added optional `marketContext` param to `buildCommentaryPrompt()` and `generateCommentary()`. Weekly route now accepts `to` override for test sends. 138 total tests.
+
 Seed data: 3 players, 17 trades, prices through Jan 30 — load via Settings > Import from `data/stock-contest-2026-01-30.json`.
 
 ## Known Limitations
@@ -135,6 +139,10 @@ Seed data: 3 players, 17 trades, prices through Jan 30 — load via Settings > I
 - **macOS AppleScript: use `do shell script "open URL"` instead of `tell application "Safari"`.** The `tell` form requires per-app Automation permissions in TCC. The `open` command uses Launch Services — zero permissions needed.
 - **`start.sh` must kill stale port processes before starting.** If a previous server crashed, the port stays occupied. Always `lsof -ti:PORT | xargs kill` before `npx next dev`. Without this, the auto-restart loop hits EADDRINUSE infinitely.
 - **`@stoqey/ib` uses `primaryExch`, not `primaryExchange`.** IBKR docs say `primaryExchange` but the TypeScript `Contract` interface abbreviates it. Non-US tickers (e.g., `.TO` for TSX) need `primaryExch` + correct currency (CAD).
+- **Gmail App Passwords work for both SMTP and IMAP.** One password grants access to sending (nodemailer) and reading (imapflow). No additional Gmail settings needed.
+- **`imapflow` search() returns `number[] | false`, not empty array.** Always guard with `!uids || uids.length === 0`. The `false` return is a footgun if you assume array.
+- **Vitest mocks: arrow functions aren't constructors.** `vi.fn().mockImplementation(() => ...)` fails with `new`. Use a class in the mock factory instead.
+- **Optional trailing params preserve backward compatibility.** Adding `marketContext?: string` as the last parameter means all existing callers work unchanged — zero modifications at call sites that don't use the new feature.
 
 ## Core Principles
 
