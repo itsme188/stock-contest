@@ -16,7 +16,25 @@ const CONNECT_TIMEOUT_MS = 5000;
 const REQUEST_TIMEOUT_MS = 15000;
 const PACE_DELAY_MS = 2000;
 
+// Exchange suffix → IBKR primaryExchange + currency
+const EXCHANGE_MAP: Record<string, { primaryExchange: string; currency: string }> = {
+  ".TO": { primaryExchange: "TSE", currency: "CAD" },   // Toronto Stock Exchange
+  ".V":  { primaryExchange: "VENTURE", currency: "CAD" },// TSX Venture
+  ".L":  { primaryExchange: "LSE", currency: "GBP" },    // London
+};
+
 function makeContract(symbol: string): Contract {
+  for (const [suffix, info] of Object.entries(EXCHANGE_MAP)) {
+    if (symbol.endsWith(suffix)) {
+      return {
+        symbol: symbol.slice(0, -suffix.length),
+        secType: SecType.STK,
+        exchange: "SMART",
+        primaryExch: info.primaryExchange,
+        currency: info.currency,
+      };
+    }
+  }
   return {
     symbol,
     secType: SecType.STK,
