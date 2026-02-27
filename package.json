@@ -18,6 +18,7 @@
     "@anthropic-ai/sdk": "^0.74.0",
     "@stoqey/ib": "^1.5.3",
     "better-sqlite3": "^12.6.2",
+    "imapflow": "^1.2.10",
     "next": "16.1.6",
     "nodemailer": "^8.0.1",
     "react": "19.2.3",

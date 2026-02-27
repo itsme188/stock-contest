@@ -132,7 +132,7 @@ const BANNED_WORDS = [
   "impressive", "exciting", "fantastic", "incredible", "remarkable",
 ];
 
-export function buildCommentaryPrompt(data: WeeklyReportData): string {
+export function buildCommentaryPrompt(data: WeeklyReportData, marketContext?: string): string {
   const { leaderboard, weeklyTrades, weekDeltas, players, currentPrices, priceHistory, trades, reportDate } = data;
 
   const now = new Date(reportDate);
@@ -216,19 +216,25 @@ Current standings as of ${reportDate}:
 ${standingsSummary}
 
 Trades this week:
-${recentTradesSummary}`;
+${recentTradesSummary}${marketContext ? `
+
+MARKET CONTEXT (from Vital Knowledge newsletter digests this week):
+${marketContext}
+
+Use the market context to add color when relevant (e.g., "AAPL's +2% outpaced a rough week for tech"). Weave it in naturally — 1-2 sentences max. Do NOT summarize the newsletter or quote it directly. Contest data is still the primary focus.` : ""}`;
 }
 
 export async function generateCommentary(
   data: WeeklyReportData,
   anthropicApiKey: string,
-  model: string = "claude-sonnet-4-5-20250929"
+  model: string = "claude-sonnet-4-5-20250929",
+  marketContext?: string
 ): Promise<string> {
   const client = new Anthropic({ apiKey: anthropicApiKey });
   const message = await client.messages.create({
     model,
     max_tokens: 500,
-    messages: [{ role: "user", content: buildCommentaryPrompt(data) }],
+    messages: [{ role: "user", content: buildCommentaryPrompt(data, marketContext) }],
   });
   const block = message.content[0];
   return block.type === "text" ? block.text : "";

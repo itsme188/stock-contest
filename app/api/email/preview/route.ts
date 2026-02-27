@@ -6,13 +6,14 @@ import {
   generateCommentary,
   buildEmailHtml,
 } from "@/lib/email";
+import { fetchVitalKnowledge } from "@/lib/vital-knowledge";
 
 export async function POST() {
   try {
     const contestData = getContestData();
     const players = contestData.players as Player[];
     const trades = contestData.trades as Trade[];
-    const { currentPrices, priceHistory, anthropicApiKey, aiModel } = contestData;
+    const { currentPrices, priceHistory, anthropicApiKey, aiModel, gmailAddress, gmailAppPassword } = contestData;
 
     if (!anthropicApiKey) {
       return NextResponse.json(
@@ -22,7 +23,10 @@ export async function POST() {
     }
 
     const reportData = buildReportData(players, trades, currentPrices, priceHistory);
-    const commentary = await generateCommentary(reportData, anthropicApiKey, aiModel);
+    const marketContext = gmailAddress && gmailAppPassword
+      ? await fetchVitalKnowledge(gmailAddress, gmailAppPassword)
+      : "";
+    const commentary = await generateCommentary(reportData, anthropicApiKey, aiModel, marketContext);
     const html = buildEmailHtml(reportData, commentary);
 
     return NextResponse.json({ html, commentary, reportDate: reportData.reportDate });

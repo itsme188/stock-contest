@@ -197,6 +197,29 @@ describe("buildCommentaryPrompt", () => {
     expect(prompt).toContain("this week");
     expect(prompt).toContain("total");
   });
+
+  it("includes market context when provided", () => {
+    const data = buildReportData(players, trades, currentPrices, {}, "2026-02-10");
+    const prompt = buildCommentaryPrompt(data, "S&P 500 fell 1.5% on tariff fears.");
+
+    expect(prompt).toContain("MARKET CONTEXT");
+    expect(prompt).toContain("S&P 500 fell 1.5% on tariff fears.");
+    expect(prompt).toContain("Contest data is still the primary focus");
+  });
+
+  it("omits market context section when not provided", () => {
+    const data = buildReportData(players, trades, currentPrices, {}, "2026-02-10");
+    const prompt = buildCommentaryPrompt(data);
+
+    expect(prompt).not.toContain("MARKET CONTEXT");
+  });
+
+  it("omits market context section when empty string", () => {
+    const data = buildReportData(players, trades, currentPrices, {}, "2026-02-10");
+    const prompt = buildCommentaryPrompt(data, "");
+
+    expect(prompt).not.toContain("MARKET CONTEXT");
+  });
 });
 
 describe("formatCommentary", () => {

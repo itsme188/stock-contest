@@ -6,6 +6,7 @@ import {
   generateCommentary,
   sendWeeklyEmail,
 } from "@/lib/email";
+import { fetchVitalKnowledge } from "@/lib/vital-knowledge";
 
 export async function POST(request: Request) {
   try {
@@ -35,7 +36,12 @@ export async function POST(request: Request) {
         { status: 400 }
       );
     }
-    const recipients = Object.values(playerEmails).filter(Boolean);
+    // Optional "to" override for test sends
+    const testTo = (body as { to?: string }).to;
+    const effectiveEmails = testTo
+      ? { _test: testTo }
+      : playerEmails;
+    const recipients = Object.values(effectiveEmails).filter(Boolean);
     if (recipients.length === 0) {
       return NextResponse.json(
         { error: "No recipient email addresses configured." },
@@ -46,12 +52,16 @@ export async function POST(request: Request) {
     const reportData = buildReportData(players, trades, currentPrices, priceHistory);
 
     // Use pre-generated commentary from preview page, or generate fresh
+    const preGenerated = (body as { commentary?: string }).commentary;
+    const marketContext = preGenerated
+      ? "" // VK context already baked into pre-generated commentary
+      : await fetchVitalKnowledge(gmailAddress, gmailAppPassword);
     const commentary =
-      (body as { commentary?: string }).commentary ||
-      (await generateCommentary(reportData, anthropicApiKey, aiModel));
+      preGenerated ||
+      (await generateCommentary(reportData, anthropicApiKey, aiModel, marketContext));
 
     await sendWeeklyEmail(
-      { gmailAddress, gmailAppPassword, anthropicApiKey, playerEmails },
+      { gmailAddress, gmailAppPassword, anthropicApiKey, playerEmails: effectiveEmails },
       reportData,
       commentary
     );
