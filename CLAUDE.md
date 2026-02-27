@@ -55,7 +55,9 @@ npm run email:status    # Check if launchd job is loaded
 - `lib/contest.ts` — Pure business logic (types, FIFO, P&L, stats, validation, chart data)
 - `lib/email.ts` — Email report logic (report data, week deltas, AI prompt, HTML/plain text templates, SMTP send)
 - `app/email/preview/page.tsx` — Email preview page (iframe preview, regenerate, send)
+- `app/api/prices/ibkr/route.ts` — IBKR TWS price fetcher (fallback, non-US ticker support via EXCHANGE_MAP)
 - `lib/db.ts` — SQLite connection, schema, CRUD
+- `scripts/start.sh` — Dev server startup with auto-restart, stale port cleanup
 - `data/` — SQLite database + exported contest data snapshots
 
 ### Contest Rules
@@ -113,6 +115,7 @@ Seed data: 3 players, 17 trades, prices through Jan 30 — load via Settings > I
 
 - **Polygon.io free tier**: 5 API calls/min. Batch refresh takes ~1 min per 5 tickers. Trade form fetch shares the same quota.
 - **IBKR TWS fallback**: Requires Trader Workstation running on localhost:7496. Fails gracefully if TWS is not running.
+- **Vitest picks up worktree test files.** Running `npm test` from main globs into `.claude/worktrees/*/` and finds duplicate test files (224 results instead of 112). Not a real failure — the tests are identical copies. ESLint ignores worktrees via `.claude/**` in `eslint.config.mjs`.
 
 ## Lessons
 
@@ -128,6 +131,10 @@ Seed data: 3 players, 17 trades, prices through Jan 30 — load via Settings > I
 - **Tone instructions need a concrete example.** "Be dry and matter-of-fact" is vague. A full example paragraph in the desired voice produces much more consistent output.
 - **Week-over-week comparisons need historical prices.** Using current prices for both "before" and "after" snapshots makes price movements invisible — only trades show up as changes. Use `getPlayerValueAtDate()` with `priceHistory` for true historical portfolio values.
 - **Label every number you give to an AI.** An unlabeled "+23%" will be used however the model sees fit. Explicitly marking "total" vs "this week" and adding a strict rule prevents the AI from presenting cost-basis returns as weekly performance.
+- **macOS .app icon: use `NSWorkspace.shared.setIcon()`, not file replacement.** Replacing `applet.icns` inside a `.app` bundle does NOT update Finder. Must use Swift `NSWorkspace` API which writes the resource fork and sets `com.apple.FinderInfo`.
+- **macOS AppleScript: use `do shell script "open URL"` instead of `tell application "Safari"`.** The `tell` form requires per-app Automation permissions in TCC. The `open` command uses Launch Services — zero permissions needed.
+- **`start.sh` must kill stale port processes before starting.** If a previous server crashed, the port stays occupied. Always `lsof -ti:PORT | xargs kill` before `npx next dev`. Without this, the auto-restart loop hits EADDRINUSE infinitely.
+- **`@stoqey/ib` uses `primaryExch`, not `primaryExchange`.** IBKR docs say `primaryExchange` but the TypeScript `Contract` interface abbreviates it. Non-US tickers (e.g., `.TO` for TSX) need `primaryExch` + correct currency (CAD).
 
 ## Core Principles
 
