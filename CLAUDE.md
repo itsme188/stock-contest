@@ -57,6 +57,7 @@ npm run email:status    # Check if launchd job is loaded
 - `lib/email.ts` — Email report logic (report data, week deltas, AI prompt, HTML/plain text templates, SMTP send)
 - `lib/vital-knowledge.ts` — Vital Knowledge email fetcher (IMAP, Gmail, market context for AI prompt)
 - `app/email/preview/page.tsx` — Email preview page (iframe preview, regenerate, send)
+- `lib/prices.ts` — Price backfill logic (IBKR primary, Polygon fallback), used by email routes and backfill API
 - `app/api/prices/ibkr/route.ts` — IBKR TWS price fetcher (fallback, non-US ticker support via EXCHANGE_MAP)
 - `lib/db.ts` — SQLite connection, schema, CRUD
 - `scripts/start.sh` — Dev server startup with auto-restart, stale port cleanup
@@ -113,6 +114,8 @@ Originally a single-file React app (Jan 14, 2026), ported to this Next.js projec
 
 **Feb 27 (session 3)**: Vital Knowledge integration. Auto-fetches VK market commentary emails from Gmail via IMAP (`imapflow`), injects into AI prompt so weekly email references real market conditions. New `lib/vital-knowledge.ts` (IMAP fetch, HTML stripping, MIME parsing, 23 tests). Added optional `marketContext` param to `buildCommentaryPrompt()` and `generateCommentary()`. Weekly route now accepts `to` override for test sends. 138 total tests.
 
+**Feb 27 (session 4)**: Fixed stale "% this week" in email AI prompt. Price history was sparse (last refresh 14 days prior), causing `getPriceAtDate` to compare against old prices. Extracted `backfillPrices()` into `lib/prices.ts` — runs automatically before email generation. IBKR TWS is primary backfill source (fast, supports CAD tickers); Polygon is fallback. Also fixed missing WW sell trade for Eli (lost during simultaneous trade entry due to debounced PUT). 138 tests.
+
 Seed data: 3 players, 17 trades, prices through Jan 30 — load via Settings > Import from `data/stock-contest-2026-01-30.json`.
 
 ## Known Limitations
@@ -143,6 +146,11 @@ Seed data: 3 players, 17 trades, prices through Jan 30 — load via Settings > I
 - **`imapflow` search() returns `number[] | false`, not empty array.** Always guard with `!uids || uids.length === 0`. The `false` return is a footgun if you assume array.
 - **Vitest mocks: arrow functions aren't constructors.** `vi.fn().mockImplementation(() => ...)` fails with `new`. Use a class in the mock factory instead.
 - **Optional trailing params preserve backward compatibility.** Adding `marketContext?: string` as the last parameter means all existing callers work unchanged — zero modifications at call sites that don't use the new feature.
+- **`getPriceAtDate` silently falls back to stale prices.** If priceHistory has gaps (e.g., no data for 2 weeks), week-over-week calculations silently use old prices. Always backfill before computing deltas.
+- **IBKR `reqHistoricalData` supports multi-day durations.** Change `"1 D"` to `"60 D"` to get full daily bar history. The `historicalData` event fires once per bar, then `"finished-..."` when done. Collect all bars, not just the last one.
+- **Simultaneous trade entry can lose one side.** The debounced PUT (500ms) may serialize before both trades are in state. If a trade is missing, check if its counterpart (buy/sell pair) exists.
+- **After adding packages in a worktree, `npm install` must be run in main.** Worktree `node_modules` are separate. Merging `package.json` changes doesn't install the modules.
+- **Clean up stale worktrees.** Old worktrees with outdated test files cause Vitest false failures when running from main (`npm test` globs into `.claude/worktrees/*/`).
 
 ## Core Principles
 
