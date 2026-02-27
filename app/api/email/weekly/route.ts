@@ -7,10 +7,15 @@ import {
   sendWeeklyEmail,
 } from "@/lib/email";
 import { fetchVitalKnowledge } from "@/lib/vital-knowledge";
+import { backfillPrices } from "@/lib/prices";
 
 export async function POST(request: Request) {
   try {
     const body = await request.json().catch(() => ({}));
+
+    // Backfill price history so "this week" calculations are accurate
+    await backfillPrices();
+
     const contestData = getContestData();
     const players = contestData.players as Player[];
     const trades = contestData.trades as Trade[];
