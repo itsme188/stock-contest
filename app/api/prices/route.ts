@@ -103,6 +103,8 @@ function fetchBarsFromIBKR(
     };
 
     const onError = (err: Error, code: number, id: number) => {
+      // Codes >= 2000 are warnings (e.g., 2174 = timezone format), not errors
+      if (code >= 2000) return;
       if (id === 1 || id === -1) {
         cleanup();
         reject(new Error(`IBKR error ${code} for ${symbol}: ${err.message}`));
@@ -150,12 +152,10 @@ async function fetchPriceViaIBKR(
   date: string | null
 ): Promise<{ price: number; date: string; actualDate?: string } | null> {
   if (date) {
-    // Request 10 days of bars ending 7 days after the target date
-    const endDate = new Date(date);
-    endDate.setDate(endDate.getDate() + 7);
-    const endDateTime = endDate.toISOString().split("T")[0].replace(/-/g, "") + " 23:59:59";
-
-    const bars = await fetchBarsFromIBKR(ticker, endDateTime, "10 D");
+    // Use empty endDateTime (= now) with duration covering target date to today + buffer
+    // This matches the working pattern in lib/prices.ts (backfillViaIBKR)
+    const daysFromTarget = Math.ceil((Date.now() - new Date(date).getTime()) / 86400000) + 5;
+    const bars = await fetchBarsFromIBKR(ticker, "", `${daysFromTarget} D`);
 
     // Find the first bar on or after the target date
     const targetBar = bars.find((b) => b.date >= date);
