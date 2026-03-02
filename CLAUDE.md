@@ -36,13 +36,17 @@ npm run email:status    # Check if launchd job is loaded
 
 ### Data Flow
 1. All data stored in SQLite (`data/contest.db`) via API routes
-2. Client loads from `GET /api/contest`, saves via debounced `PUT /api/contest` (500ms)
-3. Client-side computation of positions, P&L, leaderboard
-4. Price fetching via server-side Polygon.io API (no CORS proxies)
-5. Import/export contest data as JSON files
+2. Client loads from `GET /api/contest`; settings/prices save via debounced `PUT /api/contest` (500ms)
+3. Trades persist atomically via `POST /api/trades` and `DELETE /api/trades/[id]` (no debounce)
+4. Client-side computation of positions, P&L, leaderboard
+5. Price fetching via server-side Polygon.io API (no CORS proxies)
+6. Import/export contest data as JSON files
 
 ### API Routes
-- `GET/PUT /api/contest` — Full contest data persistence (SQLite)
+- `GET/PUT /api/contest` — Settings, prices, players persistence (SQLite key-value). PUT ignores trades.
+- `POST /api/trades` — Create trade (server-validated, UUID assigned, audit logged)
+- `DELETE /api/trades/[id]` — Delete trade (audit logged)
+- `POST /api/trades/import` — Bulk import trades (used by Settings > Import)
 - `GET /api/prices?ticker=AAPL&date=2026-01-15` — Single ticker price fetch
 - `POST /api/prices/update` — Refresh all open ticker prices via Polygon (batch, rate-limited, returns `priceDates`)
 - `POST /api/prices/ibkr` — Refresh all open ticker prices via IBKR TWS (fallback, requires TWS running)
@@ -59,7 +63,7 @@ npm run email:status    # Check if launchd job is loaded
 - `app/email/preview/page.tsx` — Email preview page (iframe preview, regenerate, send)
 - `lib/prices.ts` — Price backfill logic (IBKR primary, Polygon fallback), used by email routes and backfill API
 - `app/api/prices/ibkr/route.ts` — IBKR TWS price fetcher (fallback, non-US ticker support via EXCHANGE_MAP)
-- `lib/db.ts` — SQLite connection, schema, CRUD
+- `lib/db.ts` — SQLite connection, schema, CRUD, trade table, audit log, blob→table migration
 - `scripts/start.sh` — Dev server startup with auto-restart, stale port cleanup
 - `data/` — SQLite database + exported contest data snapshots
 
@@ -116,6 +120,8 @@ Originally a single-file React app (Jan 14, 2026), ported to this Next.js projec
 
 **Feb 27 (session 4)**: Fixed stale "% this week" in email AI prompt. Price history was sparse (last refresh 14 days prior), causing `getPriceAtDate` to compare against old prices. Extracted `backfillPrices()` into `lib/prices.ts` — runs automatically before email generation. IBKR TWS is primary backfill source (fast, supports CAD tickers); Polygon is fallback. Also fixed missing WW sell trade for Eli (lost during simultaneous trade entry due to debounced PUT). 138 tests.
 
+**Mar 2**: Atomic trade persistence. Eli's BNED buy was lost (same debounced-PUT bug as the WW sell). Root cause: entire app state saved via single debounced PUT — stale closures could overwrite trades. Fix: normalized `trades` table in SQLite with dedicated `POST/DELETE /api/trades` endpoints. Server generates UUIDs (no more `Date.now()` collisions), validates via `validateTrade()`, and audit-logs every operation. Auto-migration moves existing blob trades to normalized table on first request. Debounced PUT still handles settings/prices/players but trades are stripped at both client and server layers. Added Eli's BNED trade (1818 shares @ $8.25, Feb 19). 138 tests.
+
 Seed data: 3 players, 17 trades, prices through Jan 30 — load via Settings > Import from `data/stock-contest-2026-01-30.json`.
 
 ## Known Limitations
@@ -148,7 +154,11 @@ Seed data: 3 players, 17 trades, prices through Jan 30 — load via Settings > I
 - **Optional trailing params preserve backward compatibility.** Adding `marketContext?: string` as the last parameter means all existing callers work unchanged — zero modifications at call sites that don't use the new feature.
 - **`getPriceAtDate` silently falls back to stale prices.** If priceHistory has gaps (e.g., no data for 2 weeks), week-over-week calculations silently use old prices. Always backfill before computing deltas.
 - **IBKR `reqHistoricalData` supports multi-day durations.** Change `"1 D"` to `"60 D"` to get full daily bar history. The `historicalData` event fires once per bar, then `"finished-..."` when done. Collect all bars, not just the last one.
-- **Simultaneous trade entry can lose one side.** The debounced PUT (500ms) may serialize before both trades are in state. If a trade is missing, check if its counterpart (buy/sell pair) exists.
+- **Critical data needs atomic persistence, not debounced batch saves.** Debounced PUTs are fine for settings/prices (idempotent, re-fetchable) but trades are irreplaceable. Use dedicated POST/DELETE endpoints that write to the DB before updating client state.
+- **Server-first for irreversible operations.** `addTrade` POSTs to the server and only calls `setTrades` after the server confirms. If the POST fails, the UI stays consistent with the DB. The slight delay is worth the data safety.
+- **Double-layer defense for data boundaries.** Client doesn't send trades in the debounced PUT + server strips them if received. Either layer alone prevents the bug; both together make it impossible.
+- **Auto-migration via idempotent checks.** `migrateTradesFromBlob()` checks if the new table is empty AND the old blob exists, migrates in a transaction, then deletes the blob key. Safe to run multiple times, no manual steps.
+- **`Date.now()` is not a safe ID generator.** Millisecond-granularity IDs collide under rapid input. Use `crypto.randomUUID()` (available in Node 19+/all modern browsers) for server-generated IDs.
 - **After adding packages in a worktree, `npm install` must be run in main.** Worktree `node_modules` are separate. Merging `package.json` changes doesn't install the modules.
 - **Clean up stale worktrees.** Old worktrees with outdated test files cause Vitest false failures when running from main (`npm test` globs into `.claude/worktrees/*/`).
 
