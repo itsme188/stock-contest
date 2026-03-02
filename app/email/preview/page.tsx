@@ -1,15 +1,25 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
+import { htmlToCommentaryMarkdown } from "@/lib/commentary";
 
 export default function EmailPreview() {
   const [html, setHtml] = useState("");
   const [commentary, setCommentary] = useState("");
+  const [originalCommentary, setOriginalCommentary] = useState("");
+  const [originalHtml, setOriginalHtml] = useState("");
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const commentaryRef = useRef(commentary);
+
+  const edited = commentary !== originalCommentary && originalCommentary !== "";
+
+  // Keep ref in sync so iframe event handler always reads latest
+  commentaryRef.current = commentary;
 
   const generatePreview = useCallback(async () => {
     setLoading(true);
@@ -21,6 +31,8 @@ export default function EmailPreview() {
       if (!res.ok) throw new Error(data.error);
       setHtml(data.html);
       setCommentary(data.commentary);
+      setOriginalHtml(data.html);
+      setOriginalCommentary(data.commentary);
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "Failed to generate preview"
@@ -49,6 +61,67 @@ export default function EmailPreview() {
       setSending(false);
     }
   };
+
+  const resetCommentary = () => {
+    setHtml(originalHtml);
+    setCommentary(originalCommentary);
+  };
+
+  const handleIframeLoad = useCallback(() => {
+    const doc = iframeRef.current?.contentDocument;
+    if (!doc) return;
+
+    const commentaryDiv = doc.getElementById("commentary");
+    if (!commentaryDiv) return;
+
+    // Make editable
+    commentaryDiv.contentEditable = "true";
+    commentaryDiv.style.cursor = "text";
+    commentaryDiv.style.outline = "none";
+    commentaryDiv.style.position = "relative";
+    commentaryDiv.style.transition = "box-shadow 0.2s ease";
+
+    // Pencil icon (always visible)
+    const icon = doc.createElement("div");
+    icon.innerHTML = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M11.5 1.5L14.5 4.5L5 14H2V11L11.5 1.5Z" stroke="#9CA3AF" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M9.5 3.5L12.5 6.5" stroke="#9CA3AF" stroke-width="1.5"/>
+    </svg>`;
+    icon.style.cssText = "position: absolute; top: 8px; right: 8px; opacity: 0.5; pointer-events: none;";
+    icon.setAttribute("data-edit-icon", "true");
+    commentaryDiv.appendChild(icon);
+
+    // Hover effect
+    commentaryDiv.addEventListener("mouseenter", () => {
+      if (doc.activeElement !== commentaryDiv) {
+        commentaryDiv.style.boxShadow = "inset 0 0 0 2px rgba(37, 99, 235, 0.15)";
+      }
+    });
+    commentaryDiv.addEventListener("mouseleave", () => {
+      if (doc.activeElement !== commentaryDiv) {
+        commentaryDiv.style.boxShadow = "";
+      }
+    });
+
+    // Focus/blur styling
+    commentaryDiv.addEventListener("focus", () => {
+      commentaryDiv.style.boxShadow = "inset 0 0 0 2px rgba(37, 99, 235, 0.4)";
+    });
+    commentaryDiv.addEventListener("blur", () => {
+      commentaryDiv.style.boxShadow = "";
+    });
+
+    // Sync edits back to React state
+    commentaryDiv.addEventListener("input", () => {
+      // Remove the icon from innerHTML before converting
+      const iconEl = commentaryDiv.querySelector("[data-edit-icon]");
+      if (iconEl) iconEl.remove();
+      const md = htmlToCommentaryMarkdown(commentaryDiv.innerHTML);
+      setCommentary(md);
+      // Re-add the icon
+      commentaryDiv.appendChild(icon);
+    });
+  }, []);
 
   useEffect(() => {
     generatePreview();
@@ -79,6 +152,14 @@ export default function EmailPreview() {
             >
               {loading ? "Generating..." : "Regenerate"}
             </button>
+            {edited && (
+              <button
+                onClick={resetCommentary}
+                className="px-4 py-2 bg-amber-50 text-amber-700 border border-amber-200 rounded-lg hover:bg-amber-100 transition-colors text-sm font-medium"
+              >
+                Reset
+              </button>
+            )}
             <button
               onClick={sendEmail}
               disabled={sending || loading || !html}
@@ -121,11 +202,13 @@ export default function EmailPreview() {
               </span>
             </div>
             <iframe
+              ref={iframeRef}
               srcDoc={html}
               title="Email preview"
               className="w-full border-0"
               style={{ minHeight: "900px" }}
-              sandbox=""
+              sandbox="allow-same-origin"
+              onLoad={handleIframeLoad}
             />
           </div>
         ) : error ? (

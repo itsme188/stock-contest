@@ -8,6 +8,7 @@ import {
   buildPlainText,
   formatCommentary,
 } from "@/lib/email";
+import { htmlToCommentaryMarkdown } from "@/lib/commentary";
 
 // --- Helpers ---
 
@@ -239,6 +240,90 @@ describe("formatCommentary", () => {
     const result = formatCommentary("Paragraph one.\n\nParagraph two.");
     const pCount = (result.match(/<p /g) || []).length;
     expect(pCount).toBe(2);
+  });
+});
+
+describe("htmlToCommentaryMarkdown", () => {
+  it("converts <strong> to **bold**", () => {
+    const result = htmlToCommentaryMarkdown("<p>This is <strong>bold</strong> text.</p>");
+    expect(result).toBe("This is **bold** text.");
+  });
+
+  it("converts <b> to **bold** (browser variant)", () => {
+    const result = htmlToCommentaryMarkdown("<p>This is <b>bold</b> text.</p>");
+    expect(result).toBe("This is **bold** text.");
+  });
+
+  it("converts <em> to *italic*", () => {
+    const result = htmlToCommentaryMarkdown("<p>This is <em>italic</em> text.</p>");
+    expect(result).toBe("This is *italic* text.");
+  });
+
+  it("converts <i> to *italic* (browser variant)", () => {
+    const result = htmlToCommentaryMarkdown("<p>This is <i>italic</i> text.</p>");
+    expect(result).toBe("This is *italic* text.");
+  });
+
+  it("handles multiple paragraphs", () => {
+    const result = htmlToCommentaryMarkdown(
+      '<p style="margin: 0;">First paragraph.</p><p style="margin: 0;">Second paragraph.</p>'
+    );
+    expect(result).toBe("First paragraph.\n\nSecond paragraph.");
+  });
+
+  it("handles <div> wrappers (Chrome Enter key)", () => {
+    const result = htmlToCommentaryMarkdown(
+      "<div>First paragraph.</div><div>Second paragraph.</div>"
+    );
+    expect(result).toBe("First paragraph.\n\nSecond paragraph.");
+  });
+
+  it("handles <br> as newline", () => {
+    const result = htmlToCommentaryMarkdown("<p>Line one.<br>Line two.</p>");
+    expect(result).toBe("Line one.\nLine two.");
+  });
+
+  it("strips inline styles from tags", () => {
+    const result = htmlToCommentaryMarkdown(
+      '<p style="color: red; font-size: 15px;">Clean text.</p>'
+    );
+    expect(result).toBe("Clean text.");
+  });
+
+  it("decodes HTML entities", () => {
+    const result = htmlToCommentaryMarkdown("<p>AT&amp;T &lt;3 &quot;quotes&quot;</p>");
+    expect(result).toBe('AT&T <3 "quotes"');
+  });
+
+  it("collapses excessive newlines", () => {
+    const result = htmlToCommentaryMarkdown("<p>A</p><p></p><p></p><p>B</p>");
+    expect(result).toBe("A\n\nB");
+  });
+
+  it("round-trips with formatCommentary", () => {
+    const original = "The **S&P 500** fell 2% this week.\n\nMeanwhile, *tech stocks* rallied.";
+    const html = formatCommentary(original);
+    const roundTripped = htmlToCommentaryMarkdown(html);
+    expect(roundTripped).toBe(original);
+  });
+
+  it("handles nested bold+italic", () => {
+    const result = htmlToCommentaryMarkdown("<p><strong><em>bold italic</em></strong></p>");
+    expect(result).toBe("***bold italic***");
+  });
+});
+
+describe("buildEmailHtml commentary id", () => {
+  it("includes id=\"commentary\" on the commentary div", () => {
+    const data = buildReportData(
+      [{ id: "p1", name: "Test", color: "#000", initialCash: 100000 }],
+      [],
+      {},
+      {},
+      "2026-03-01"
+    );
+    const result = buildEmailHtml(data, "Test commentary.");
+    expect(result).toContain('id="commentary"');
   });
 });
 

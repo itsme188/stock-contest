@@ -392,7 +392,7 @@ export function buildEmailHtml(
     <div style="background: white; border-radius: 0 0 12px 12px; border: 1px solid #E5E7EB; border-top: none;">
 
       <!-- Commentary -->
-      <div style="padding: 24px; border-bottom: 1px solid #E5E7EB; border-left: 4px solid #2563EB;">
+      <div id="commentary" style="padding: 24px; border-bottom: 1px solid #E5E7EB; border-left: 4px solid #2563EB;">
         ${commentaryHtml}
       </div>
 
