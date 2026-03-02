@@ -88,7 +88,7 @@ export default function StockContestTracker() {
       });
   }, []);
 
-  // Debounced save to API whenever persisted state changes
+  // Debounced save for settings, prices, players (NOT trades — those use atomic API calls)
   const saveToApi = useCallback(() => {
     if (!loaded.current) return;
     if (saveTimer.current) clearTimeout(saveTimer.current);
@@ -98,7 +98,6 @@ export default function StockContestTracker() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           players,
-          trades,
           contestStartDate,
           polygonApiKey,
           currentPrices,
@@ -111,7 +110,7 @@ export default function StockContestTracker() {
         }),
       }).catch((err) => console.error("Failed to save contest data:", err));
     }, 500);
-  }, [players, trades, contestStartDate, polygonApiKey, currentPrices, priceHistory, gmailAddress, gmailAppPassword, anthropicApiKey, aiModel, playerEmails]);
+  }, [players, contestStartDate, polygonApiKey, currentPrices, priceHistory, gmailAddress, gmailAppPassword, anthropicApiKey, aiModel, playerEmails]);
 
   useEffect(() => {
     saveToApi();
@@ -219,7 +218,8 @@ export default function StockContestTracker() {
 
   // --- Trade Logic ---
 
-  const addTrade = () => {
+  const addTrade = async () => {
+    // Client-side validation for instant feedback
     const result = validateTrade(
       {
         playerId: tradeForm.playerId,
@@ -237,34 +237,55 @@ export default function StockContestTracker() {
       return;
     }
 
-    const ticker = tradeForm.ticker.toUpperCase();
+    try {
+      const res = await fetch("/api/trades", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          playerId: tradeForm.playerId,
+          type: tradeForm.type,
+          ticker: tradeForm.ticker.toUpperCase(),
+          shares: parseFloat(tradeForm.shares),
+          price: parseFloat(tradeForm.price),
+          date: tradeForm.date,
+        }),
+      });
+      const data = await res.json();
 
-    const newTrade: Trade = {
-      id: Date.now().toString(),
-      playerId: tradeForm.playerId,
-      type: tradeForm.type,
-      ticker: ticker,
-      shares: parseFloat(tradeForm.shares),
-      price: parseFloat(tradeForm.price),
-      date: tradeForm.date,
-      timestamp: new Date(tradeForm.date).getTime(),
-    };
+      if (!res.ok) {
+        alert(data.error || "Failed to save trade");
+        return;
+      }
 
-    setTrades([...trades, newTrade]);
-    setTradeForm({
-      playerId: tradeForm.playerId,
-      type: "buy",
-      ticker: "",
-      shares: "",
-      price: "",
-      date: new Date().toISOString().split("T")[0],
-    });
-    setShowAddTrade(false);
+      // Only update local state AFTER server confirms persistence
+      setTrades((prev) => [...prev, data.trade]);
+      setTradeForm({
+        playerId: tradeForm.playerId,
+        type: "buy",
+        ticker: "",
+        shares: "",
+        price: "",
+        date: new Date().toISOString().split("T")[0],
+      });
+      setShowAddTrade(false);
+    } catch (err) {
+      alert(`Failed to save trade: ${err instanceof Error ? err.message : err}`);
+    }
   };
 
-  const deleteTrade = (tradeId: string) => {
-    if (window.confirm("Delete this trade?")) {
-      setTrades(trades.filter((t) => t.id !== tradeId));
+  const deleteTrade = async (tradeId: string) => {
+    if (!window.confirm("Delete this trade?")) return;
+
+    try {
+      const res = await fetch(`/api/trades/${tradeId}`, { method: "DELETE" });
+      if (!res.ok) {
+        const data = await res.json();
+        alert(data.error || "Failed to delete trade");
+        return;
+      }
+      setTrades((prev) => prev.filter((t) => t.id !== tradeId));
+    } catch (err) {
+      alert(`Failed to delete trade: ${err instanceof Error ? err.message : err}`);
     }
   };
 
@@ -286,15 +307,30 @@ export default function StockContestTracker() {
     const file = event.target.files?.[0];
     if (file) {
       const reader = new FileReader();
-      reader.onload = (e) => {
+      reader.onload = async (e) => {
         try {
           const data = JSON.parse(e.target?.result as string);
           if (data.players) setPlayers(data.players);
-          if (data.trades) setTrades(data.trades);
           if (data.contestStartDate)
             setContestStartDate(data.contestStartDate);
           if (data.currentPrices) setCurrentPrices(data.currentPrices);
           if (data.priceHistory) setPriceHistory(data.priceHistory);
+
+          // Import trades via atomic API endpoint
+          if (data.trades?.length) {
+            const res = await fetch("/api/trades/import", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ trades: data.trades, clear: true }),
+            });
+            if (!res.ok) {
+              const err = await res.json();
+              alert(`Failed to import trades: ${err.error}`);
+              return;
+            }
+            setTrades(data.trades);
+          }
+
           alert("Data imported successfully!");
         } catch {
           alert("Error importing data. Please check the file format.");

@@ -15,7 +15,9 @@ export async function GET() {
 
 export async function PUT(request: Request) {
   try {
-    const data = await request.json();
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { trades, ...data } = await request.json();
+    // trades are managed via /api/trades — strip them from the blob save
     saveContestData(data);
     return NextResponse.json({ ok: true });
   } catch (err) {
