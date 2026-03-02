@@ -30,7 +30,7 @@ npm run email:status    # Check if launchd job is loaded
 - **AI**: @anthropic-ai/sdk (Claude Sonnet for weekly email commentary)
 - **Prices**: Polygon.io API (free tier, 5 calls/min) + IBKR TWS fallback via @stoqey/ib
 - **Market Context**: Vital Knowledge email digests via IMAP (imapflow)
-- **Testing**: Vitest (138 tests)
+- **Testing**: Vitest (203 tests)
 
 ## Architecture
 
@@ -44,6 +44,7 @@ npm run email:status    # Check if launchd job is loaded
 
 ### API Routes
 - `GET/PUT /api/contest` — Settings, prices, players persistence (SQLite key-value). PUT ignores trades.
+- `GET /api/health` — DB health check (integrity_check pragma, player/trade counts)
 - `POST /api/trades` — Create trade (server-validated, UUID assigned, audit logged)
 - `DELETE /api/trades/[id]` — Delete trade (audit logged)
 - `POST /api/trades/import` — Bulk import trades (used by Settings > Import)
@@ -65,6 +66,7 @@ npm run email:status    # Check if launchd job is loaded
 - `app/api/prices/ibkr/route.ts` — IBKR TWS price fetcher (fallback, non-US ticker support via EXCHANGE_MAP)
 - `lib/db.ts` — SQLite connection, schema, CRUD, trade table, audit log, blob→table migration
 - `scripts/start.sh` — Dev server startup with auto-restart, stale port cleanup
+- `scripts/backup-db.sh` — SQLite online backup to timestamped file in `data/backups/`
 - `data/` — SQLite database + exported contest data snapshots
 
 ### Contest Rules
@@ -122,13 +124,15 @@ Originally a single-file React app (Jan 14, 2026), ported to this Next.js projec
 
 **Mar 2**: Atomic trade persistence. Eli's BNED buy was lost (same debounced-PUT bug as the WW sell). Root cause: entire app state saved via single debounced PUT — stale closures could overwrite trades. Fix: normalized `trades` table in SQLite with dedicated `POST/DELETE /api/trades` endpoints. Server generates UUIDs (no more `Date.now()` collisions), validates via `validateTrade()`, and audit-logs every operation. Auto-migration moves existing blob trades to normalized table on first request. Debounced PUT still handles settings/prices/players but trades are stripped at both client and server layers. Added Eli's BNED trade (1818 shares @ $8.25, Feb 19). 138 tests.
 
+**Mar 2 (session 2)**: Reliability overhaul. Added 65 tests (203 total) covering DB layer (`lib/db.test.ts`, 33 tests) and API routes (32 tests across 4 files). Fixed NaN timestamp bug in trade creation, hardened import validation (`!t.price` → `t.price == null`), added Polygon response type guards. New infrastructure: save-failure banner, `/api/health` endpoint, `scripts/backup-db.sh` (SQLite online backup), macOS failure notifications in weekly email script. Player delete now cascades trades to DB. Price staleness indicator on Dashboard.
+
 Seed data: 3 players, 17 trades, prices through Jan 30 — load via Settings > Import from `data/stock-contest-2026-01-30.json`.
 
 ## Known Limitations
 
 - **Polygon.io free tier**: 5 API calls/min. Batch refresh takes ~1 min per 5 tickers. Trade form fetch shares the same quota.
 - **IBKR TWS fallback**: Requires Trader Workstation running on localhost:7496. Fails gracefully if TWS is not running.
-- **Vitest picks up worktree test files.** Running `npm test` from main globs into `.claude/worktrees/*/` and finds duplicate test files (224 results instead of 112). Not a real failure — the tests are identical copies. ESLint ignores worktrees via `.claude/**` in `eslint.config.mjs`.
+- **Vitest picks up worktree test files.** Running `npm test` from main globs into `.claude/worktrees/*/` and finds duplicate test files. Always clean up worktrees after merge (`git worktree remove`, `git branch -d`). ESLint ignores worktrees via `.claude/**` in `eslint.config.mjs`.
 
 ## Lessons
 
@@ -161,6 +165,11 @@ Seed data: 3 players, 17 trades, prices through Jan 30 — load via Settings > I
 - **`Date.now()` is not a safe ID generator.** Millisecond-granularity IDs collide under rapid input. Use `crypto.randomUUID()` (available in Node 19+/all modern browsers) for server-generated IDs.
 - **After adding packages in a worktree, `npm install` must be run in main.** Worktree `node_modules` are separate. Merging `package.json` changes doesn't install the modules.
 - **Clean up stale worktrees.** Old worktrees with outdated test files cause Vitest false failures when running from main (`npm test` globs into `.claude/worktrees/*/`).
+- **`!value` rejects zero, not just null/undefined.** `!t.price` catches `price: 0` as "missing". Use `t.price == null` for nullable checks (catches `null` and `undefined` but not `0`).
+- **DB tests: use in-memory SQLite, not mocks.** `new Database(":memory:")` + `_initSchema()` gives real SQL execution with zero I/O. Catches CHECK constraint bugs that mocks would miss.
+- **API route tests: mock the DB layer, not HTTP.** Import the handler function directly, construct `new Request(...)`, call `POST(request)`. Mock `@/lib/db` with `vi.mock`. Tests run in <20ms each.
+- **Type-guard external API responses before storing.** `typeof price === 'number' && isFinite(price) && price > 0` prevents NaN/Infinity/null from Polygon corrupting the database.
+- **Always remove worktrees AND branches after merge.** `git worktree remove` + `git branch -d` — leftover branches prevent future worktree creation with the same name.
 
 ## Core Principles
 
