@@ -176,11 +176,6 @@ export default function StockContestTracker() {
     ticker: string,
     date: string | null = null
   ): Promise<number | null> => {
-    if (!polygonApiKey) {
-      setPriceError("Please add your API key in Settings first");
-      return null;
-    }
-
     setFetchingPrice(true);
     setPriceError("");
 

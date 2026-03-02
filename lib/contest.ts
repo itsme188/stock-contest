@@ -511,9 +511,10 @@ export function validateTrade(
 
 export function getPriceStaleness(
   currentPrices: Record<string, number>,
-  priceHistory: Record<string, Record<string, number>>
+  priceHistory: Record<string, Record<string, number>>,
+  openTickers?: string[]
 ): { stale: boolean; latestDate: string | null; daysOld: number } {
-  const tickers = Object.keys(currentPrices);
+  const tickers = openTickers ?? Object.keys(currentPrices);
   if (tickers.length === 0) return { stale: false, latestDate: null, daysOld: 0 };
 
   let oldestLatest: string | null = null;

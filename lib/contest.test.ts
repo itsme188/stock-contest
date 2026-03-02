@@ -12,6 +12,7 @@ import {
   getPriceAtDate,
   getPlayerValueAtDate,
   getPerformanceChartData,
+  getPriceStaleness,
   formatCurrency,
   formatPercent,
   validateTrade,
@@ -975,5 +976,80 @@ describe("getLastSaleProceeds", () => {
       makeTrade({ playerId: PLAYER_A, type: "buy", ticker: "GOOG", shares: 50, price: 200, date: "2026-01-20" }),
     ];
     expect(getLastSaleProceeds(PLAYER_A, trades)).toBeNull();
+  });
+});
+
+describe("getPriceStaleness", () => {
+  const today = new Date().toISOString().split("T")[0];
+
+  it("returns not stale when no tickers in currentPrices", () => {
+    const result = getPriceStaleness({}, {});
+    expect(result.stale).toBe(false);
+    expect(result.daysOld).toBe(0);
+  });
+
+  it("returns stale when a ticker has no priceHistory", () => {
+    const result = getPriceStaleness({ AAPL: 150 }, {});
+    expect(result.stale).toBe(true);
+    expect(result.daysOld).toBe(Infinity);
+  });
+
+  it("returns not stale when all tickers have recent priceHistory", () => {
+    const result = getPriceStaleness(
+      { AAPL: 150, GOOG: 2800 },
+      { AAPL: { [today]: 150 }, GOOG: { [today]: 2800 } }
+    );
+    expect(result.stale).toBe(false);
+    expect(result.daysOld).toBe(0);
+  });
+
+  it("returns stale based on the OLDEST ticker's latest date", () => {
+    const result = getPriceStaleness(
+      { AAPL: 150, GOOG: 2800, WW: 5 },
+      {
+        AAPL: { [today]: 150 },
+        GOOG: { [today]: 2800 },
+        WW: { "2026-01-22": 5 },  // stale closed position
+      }
+    );
+    expect(result.stale).toBe(true);
+    expect(result.latestDate).toBe("2026-01-22");
+  });
+
+  it("with openTickers filter: ignores stale closed-position tickers", () => {
+    const result = getPriceStaleness(
+      { AAPL: 150, GOOG: 2800, WW: 5 },
+      {
+        AAPL: { [today]: 150 },
+        GOOG: { [today]: 2800 },
+        WW: { "2026-01-22": 5 },  // stale but not in open positions
+      },
+      ["AAPL", "GOOG"]  // only check open positions
+    );
+    expect(result.stale).toBe(false);
+    expect(result.daysOld).toBe(0);
+  });
+
+  it("with openTickers filter: returns not stale for empty tickers list", () => {
+    const result = getPriceStaleness(
+      { WW: 5 },
+      { WW: { "2026-01-22": 5 } },
+      []  // no open positions
+    );
+    expect(result.stale).toBe(false);
+    expect(result.daysOld).toBe(0);
+  });
+
+  it("without openTickers: backward-compatible, checks all currentPrices", () => {
+    const result = getPriceStaleness(
+      { AAPL: 150, WW: 5 },
+      {
+        AAPL: { [today]: 150 },
+        WW: { "2026-01-22": 5 },
+      }
+    );
+    // Without filter, WW drags it to stale
+    expect(result.stale).toBe(true);
+    expect(result.latestDate).toBe("2026-01-22");
   });
 });

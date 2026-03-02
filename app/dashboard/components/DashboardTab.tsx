@@ -254,7 +254,7 @@ export default function DashboardTab({
             ))}
           </div>
           {Object.keys(currentPrices).length > 0 && (() => {
-            const staleness = getPriceStaleness(currentPrices, priceHistory);
+            const staleness = getPriceStaleness(currentPrices, priceHistory, allOpenTickers);
             return (
               <p className="text-xs mt-3">
                 {staleness.stale ? (
