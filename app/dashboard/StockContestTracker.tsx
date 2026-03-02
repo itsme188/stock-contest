@@ -194,8 +194,15 @@ export default function StockContestTracker() {
         return null;
       }
 
+      // Show price type label
       if (data.actualDate) {
         setPriceError(`Market closed ${targetDate}. Using ${data.actualDate} open.`);
+      } else if (data.priceType === "current") {
+        setPriceError(`Current price (${data.source === "ibkr" ? "IBKR" : "Polygon"})`);
+      } else if (data.priceType === "close") {
+        setPriceError(`Closing price, ${new Date(data.date + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })} (${data.source === "ibkr" ? "IBKR" : "Polygon"})`);
+      } else if (data.priceType === "open") {
+        setPriceError(`Opening price, ${new Date(data.date + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })} (${data.source === "ibkr" ? "IBKR" : "Polygon"})`);
       }
 
       setTradeForm((prev) => ({ ...prev, price: data.price.toFixed(2) }));

@@ -142,39 +142,59 @@ function fetchBarsFromIBKR(
   });
 }
 
+/** Check if US market is currently in regular trading hours (9:30 AM - 4:00 PM ET, weekdays) */
+function isMarketOpen(): boolean {
+  const et = new Date(new Date().toLocaleString("en-US", { timeZone: "America/New_York" }));
+  const day = et.getDay();
+  if (day === 0 || day === 6) return false;
+  const mins = et.getHours() * 60 + et.getMinutes();
+  return mins >= 570 && mins < 960; // 9:30 AM = 570, 4:00 PM = 960
+}
+
+interface PriceResult {
+  price: number;
+  date: string;
+  actualDate?: string;
+  priceType: "current" | "close" | "open";
+}
+
 /**
  * Try IBKR for a single-ticker price.
- * - With date: returns open price on first trading day on/after that date
- * - Without date: returns close price of the most recent bar
+ * - Today + market open: current trading price (bar close = last trade)
+ * - Today + market closed: last closing price
+ * - Past date: opening price for that trading day
  */
 async function fetchPriceViaIBKR(
   ticker: string,
   date: string | null
-): Promise<{ price: number; date: string; actualDate?: string } | null> {
-  if (date) {
-    // Use empty endDateTime (= now) with duration covering target date to today + buffer
-    // This matches the working pattern in lib/prices.ts (backfillViaIBKR)
-    const daysFromTarget = Math.ceil((Date.now() - new Date(date).getTime()) / 86400000) + 5;
-    const bars = await fetchBarsFromIBKR(ticker, "", `${daysFromTarget} D`);
+): Promise<PriceResult | null> {
+  const today = new Date().toISOString().split("T")[0];
+  const isToday = !date || date === today;
 
-    // Find the first bar on or after the target date
-    const targetBar = bars.find((b) => b.date >= date);
-    if (targetBar && typeof targetBar.open === "number" && isFinite(targetBar.open) && targetBar.open > 0) {
-      return {
-        price: targetBar.open,
-        date: targetBar.date,
-        actualDate: targetBar.date !== date ? targetBar.date : undefined,
-      };
-    }
-    return null;
-  } else {
-    // Latest close price
+  if (isToday) {
+    // Fetch latest bar — close = current price (if market open) or last close
     const bars = await fetchBarsFromIBKR(ticker, "", "1 D");
     const lastBar = bars[bars.length - 1];
     if (lastBar && typeof lastBar.close === "number" && isFinite(lastBar.close) && lastBar.close > 0) {
       return {
         price: lastBar.close,
         date: lastBar.date,
+        priceType: isMarketOpen() ? "current" : "close",
+      };
+    }
+    return null;
+  } else {
+    // Historical date: return open price
+    const daysFromTarget = Math.ceil((Date.now() - new Date(date).getTime()) / 86400000) + 5;
+    const bars = await fetchBarsFromIBKR(ticker, "", `${daysFromTarget} D`);
+
+    const targetBar = bars.find((b) => b.date >= date);
+    if (targetBar && typeof targetBar.open === "number" && isFinite(targetBar.open) && targetBar.open > 0) {
+      return {
+        price: targetBar.open,
+        date: targetBar.date,
+        actualDate: targetBar.date !== date ? targetBar.date : undefined,
+        priceType: "open",
       };
     }
     return null;
@@ -188,8 +208,11 @@ async function fetchPriceViaPolygon(
   ticker: string,
   date: string | null,
   polygonApiKey: string
-): Promise<{ price: number; date: string; actualDate?: string } | null> {
-  if (date) {
+): Promise<PriceResult | null> {
+  const today = new Date().toISOString().split("T")[0];
+
+  if (date && date !== today) {
+    // Historical date — open price
     for (let dayOffset = 0; dayOffset < 7; dayOffset++) {
       const checkDate = new Date(date);
       checkDate.setDate(checkDate.getDate() + dayOffset);
@@ -204,6 +227,7 @@ async function fetchPriceViaPolygon(
           price: data.open,
           date: dateStr,
           actualDate: dateStr !== date ? dateStr : undefined,
+          priceType: "open",
         };
       }
 
@@ -211,13 +235,13 @@ async function fetchPriceViaPolygon(
         throw new Error(`Polygon API: ${data.error}`);
       }
 
-      // NOT_FOUND or weekend — try next day
       if (data.status === "NOT_FOUND" || data.status === "ERROR") {
         continue;
       }
     }
     return null;
   } else {
+    // Today or no date — previous close (Polygon can't give intraday current price)
     const url = `https://api.polygon.io/v2/aggs/ticker/${ticker}/prev?adjusted=true&apiKey=${polygonApiKey}`;
     const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
     const data = await res.json();
@@ -231,6 +255,7 @@ async function fetchPriceViaPolygon(
       return {
         price: closePrice,
         date: new Date().toISOString().split("T")[0],
+        priceType: "close",
       };
     }
     return null;
