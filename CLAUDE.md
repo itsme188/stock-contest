@@ -126,12 +126,14 @@ Originally a single-file React app (Jan 14, 2026), ported to this Next.js projec
 
 **Mar 2 (session 2)**: Reliability overhaul. Added 65 tests (203 total) covering DB layer (`lib/db.test.ts`, 33 tests) and API routes (32 tests across 4 files). Fixed NaN timestamp bug in trade creation, hardened import validation (`!t.price` → `t.price == null`), added Polygon response type guards. New infrastructure: save-failure banner, `/api/health` endpoint, `scripts/backup-db.sh` (SQLite online backup), macOS failure notifications in weekly email script. Player delete now cascades trades to DB. Price staleness indicator on Dashboard.
 
+**Mar 2 (session 3)**: IBKR-first trade form pricing. Trade form "Fetch Price & Calculate Shares" now tries IBKR TWS first (no API key needed), falls back to Polygon. Smart price types: current price during market hours, closing price outside hours, opening price for historical dates. Client labels each clearly. Fixed staleness indicator bug — `getPriceStaleness()` was checking ALL tickers in `currentPrices` including closed positions, anchoring the indicator to stale dates. Now accepts optional `openTickers` param. 218 tests (15 new).
+
 Seed data: 3 players, 17 trades, prices through Jan 30 — load via Settings > Import from `data/stock-contest-2026-01-30.json`.
 
 ## Known Limitations
 
 - **Polygon.io free tier**: 5 API calls/min. Batch refresh takes ~1 min per 5 tickers. Trade form fetch shares the same quota.
-- **IBKR TWS fallback**: Requires Trader Workstation running on localhost:7496. Fails gracefully if TWS is not running.
+- **IBKR TWS (primary price source)**: Requires Trader Workstation running on localhost:7496. Used for trade form pricing, batch refresh, and backfill. Falls back to Polygon if TWS is not running.
 - **Vitest picks up worktree test files.** Running `npm test` from main globs into `.claude/worktrees/*/` and finds duplicate test files. Always clean up worktrees after merge (`git worktree remove`, `git branch -d`). ESLint ignores worktrees via `.claude/**` in `eslint.config.mjs`.
 
 ## Lessons
@@ -140,7 +142,7 @@ Seed data: 3 players, 17 trades, prices through Jan 30 — load via Settings > I
 - **Always provide a non-API fallback for user actions.** The trade form needs a manual "Calculate Shares" button that works without Polygon, since the API has strict rate limits.
 - **Polygon `/prev` endpoint returns the most recently completed session's close.** It updates ~15 min after market close. Schedule automated jobs at least 20 min after close (4:20 PM+). Always pass a date parameter to get opening prices for trade logging.
 - **Return machine-readable metadata from API responses.** The Polygon update route now returns `priceDates` (bar dates) so callers can detect stale data programmatically instead of guessing.
-- **Layered fallbacks beat single-source dependencies.** Price fetching: Polygon (primary) → retry with delay → IBKR TWS (fallback). Each layer fails gracefully.
+- **Layered fallbacks beat single-source dependencies.** Price fetching: IBKR TWS (primary) → Polygon (fallback). Each layer fails gracefully. IBKR is faster and has no rate limits; Polygon is the safety net.
 - **Labels must match data.** "Portfolio Value" showing only positions (not cash) was confusing. Use precise labels: "Total Value" (cash+positions), "Cash", "Positions".
 - **Pre-compute everything for the AI — never make it do math.** Show `$19,888 deployed, now worth $20,500 (+3.07%)`, not `44 shares @ $452 avg cost`. The model will confuse per-share price with position size.
 - **When data can be misinterpreted, add an explicit rule.** Even with better data, add a strict rule like "Position size = total dollars deployed, NOT per-share price." Belt and suspenders.
@@ -170,6 +172,10 @@ Seed data: 3 players, 17 trades, prices through Jan 30 — load via Settings > I
 - **API route tests: mock the DB layer, not HTTP.** Import the handler function directly, construct `new Request(...)`, call `POST(request)`. Mock `@/lib/db` with `vi.mock`. Tests run in <20ms each.
 - **Type-guard external API responses before storing.** `typeof price === 'number' && isFinite(price) && price > 0` prevents NaN/Infinity/null from Polygon corrupting the database.
 - **Always remove worktrees AND branches after merge.** `git worktree remove` + `git branch -d` — leftover branches prevent future worktree creation with the same name.
+- **IBKR error codes >= 2000 are warnings, not errors.** Code 2174 (timezone format) still returns data after the warning. The `onError` handler must skip codes >= 2000 or it will reject the promise before data arrives.
+- **IBKR `reqHistoricalData` endDateTime: use `""` (now) with calculated duration.** Passing a specific `endDateTime` like `"20260309 23:59:59"` triggers warning 2174 (timezone required). Using `""` with a duration that covers the target period avoids the issue entirely — this is the pattern used in `lib/prices.ts` and `app/api/prices/ibkr/route.ts`.
+- **Staleness/scope mismatch: always check the same set you update.** `getPriceStaleness` checked all tickers in `currentPrices` (append-only, includes closed positions), but refresh only updates open positions. The staleness indicator was permanently anchored to closed-position dates. Fix: pass the relevant ticker subset.
+- **Git merges from worktrees may not trigger Next.js hot-reload.** File timestamps from `git merge` don't always wake Turbopack's file watcher. Kill and restart the dev server after merging worktree changes: `lsof -ti:3001 | xargs kill`.
 
 ## Core Principles
 
