@@ -16,6 +16,7 @@ import {
   getPlayerPositions,
   getLatestTradePrice,
   getCurrentPrice,
+  getPriceStaleness,
   formatCurrency,
   formatPercent,
 } from "@/lib/contest";
@@ -25,6 +26,7 @@ interface DashboardTabProps {
   trades: Trade[];
   currentPrices: Record<string, number>;
   setCurrentPrices: React.Dispatch<React.SetStateAction<Record<string, number>>>;
+  priceHistory: Record<string, Record<string, number>>;
   setPriceHistory: React.Dispatch<React.SetStateAction<Record<string, Record<string, number>>>>;
   leaderboard: LeaderboardEntry[];
   chartData: Record<string, string>[];
@@ -37,6 +39,7 @@ export default function DashboardTab({
   trades,
   currentPrices,
   setCurrentPrices,
+  priceHistory,
   setPriceHistory,
   leaderboard,
   chartData,
@@ -250,13 +253,27 @@ export default function DashboardTab({
               </div>
             ))}
           </div>
-          {Object.keys(currentPrices).length > 0 && (
-            <p className="text-xs text-gray-500 mt-3">
-              {lastRefreshed
-                ? `Last refreshed: ${lastRefreshed}.`
-                : "Prices are saved automatically."}
-            </p>
-          )}
+          {Object.keys(currentPrices).length > 0 && (() => {
+            const staleness = getPriceStaleness(currentPrices, priceHistory);
+            return (
+              <p className="text-xs mt-3">
+                {staleness.stale ? (
+                  <span className="text-amber-600 font-medium">
+                    ⚠️ Prices last updated: {staleness.latestDate
+                      ? `${new Date(staleness.latestDate + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })} (${staleness.daysOld} day${staleness.daysOld !== 1 ? "s" : ""} ago)`
+                      : "unknown"
+                    }
+                  </span>
+                ) : (
+                  <span className="text-gray-500">
+                    {lastRefreshed
+                      ? `Last refreshed: ${lastRefreshed}.`
+                      : "Prices are saved automatically."}
+                  </span>
+                )}
+              </p>
+            );
+          })()}
         </div>
       )}
 

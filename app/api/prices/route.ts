@@ -30,7 +30,7 @@ export async function GET(request: NextRequest) {
         const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
         const data = await res.json();
 
-        if (data.status === "OK" && typeof data.open === "number") {
+        if (data.status === "OK" && typeof data.open === "number" && isFinite(data.open) && data.open > 0) {
           return NextResponse.json({
             price: data.open,
             date: dateStr,
@@ -62,9 +62,10 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ error: `Polygon API: ${data.error}` }, { status: 502 });
       }
 
-      if (data.results?.[0]?.c) {
+      const closePrice = data.results?.[0]?.c;
+      if (typeof closePrice === "number" && isFinite(closePrice) && closePrice > 0) {
         return NextResponse.json({
-          price: data.results[0].c,
+          price: closePrice,
           date: new Date().toISOString().split("T")[0],
         });
       }

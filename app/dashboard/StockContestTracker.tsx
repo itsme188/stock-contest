@@ -44,6 +44,7 @@ export default function StockContestTracker() {
   const [playerEmails, setPlayerEmails] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const [tradeForm, setTradeForm] = useState<TradeForm>({
     playerId: "",
@@ -108,7 +109,15 @@ export default function StockContestTracker() {
           aiModel,
           playerEmails,
         }),
-      }).catch((err) => console.error("Failed to save contest data:", err));
+      })
+        .then((res) => {
+          if (!res.ok) throw new Error(`Save failed (${res.status})`);
+          setSaveError(null);
+        })
+        .catch((err) => {
+          console.error("Failed to save contest data:", err);
+          setSaveError("Failed to save. Changes may be lost.");
+        });
     }, 500);
   }, [players, contestStartDate, polygonApiKey, currentPrices, priceHistory, gmailAddress, gmailAppPassword, anthropicApiKey, aiModel, playerEmails]);
 
@@ -138,11 +147,27 @@ export default function StockContestTracker() {
     setEditingPlayer(null);
   };
 
-  const deletePlayer = (id: string) => {
-    if (window.confirm("Delete this player and all their trades?")) {
-      setPlayers(players.filter((p) => p.id !== id));
-      setTrades(trades.filter((t) => t.playerId !== id));
+  const deletePlayer = async (id: string) => {
+    if (!window.confirm("Delete this player and all their trades?")) return;
+
+    // Delete trades from DB first (server-first for irreversible operations)
+    const playerTrades = trades.filter((t) => t.playerId === id);
+    for (const trade of playerTrades) {
+      try {
+        const res = await fetch(`/api/trades/${trade.id}`, { method: "DELETE" });
+        if (!res.ok) {
+          const data = await res.json();
+          alert(`Failed to delete trade ${trade.ticker}: ${data.error || res.status}`);
+          return;
+        }
+      } catch (err) {
+        alert(`Failed to delete trade: ${err instanceof Error ? err.message : err}`);
+        return;
+      }
     }
+
+    setPlayers(players.filter((p) => p.id !== id));
+    setTrades(trades.filter((t) => t.playerId !== id));
   };
 
   // --- Price Fetching (via server-side API route) ---
@@ -422,6 +447,20 @@ export default function StockContestTracker() {
         </div>
       )}
 
+      {saveError && (
+        <div className="max-w-7xl mx-auto px-4 pt-4">
+          <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 flex items-center justify-between">
+            <p className="text-amber-700 text-sm">{saveError}</p>
+            <button
+              onClick={() => { setSaveError(null); saveToApi(); }}
+              className="px-3 py-1 text-sm bg-amber-100 text-amber-700 rounded hover:bg-amber-200 transition-colors"
+            >
+              Retry
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="max-w-7xl mx-auto px-4 py-6">
         {activeTab === "dashboard" && (
           <DashboardTab
@@ -429,6 +468,7 @@ export default function StockContestTracker() {
             trades={trades}
             currentPrices={currentPrices}
             setCurrentPrices={setCurrentPrices}
+            priceHistory={priceHistory}
             setPriceHistory={setPriceHistory}
             leaderboard={leaderboard}
             chartData={chartData}

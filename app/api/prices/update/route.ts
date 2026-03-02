@@ -52,14 +52,15 @@ export async function POST() {
             const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
             const data = await res.json();
 
-            if (data.results?.[0]?.c) {
+            const closePrice = data.results?.[0]?.c;
+            if (typeof closePrice === "number" && isFinite(closePrice) && closePrice > 0) {
               // Extract bar date from Polygon timestamp (ms → YYYY-MM-DD)
               const barDate = data.results[0].t
                 ? new Date(data.results[0].t).toISOString().split("T")[0]
                 : undefined;
-              return { ticker, price: data.results[0].c, barDate };
+              return { ticker, price: closePrice, barDate };
             }
-            errors.push(`${ticker}: no price data`);
+            errors.push(`${ticker}: no valid price data`);
             return null;
           } catch (err) {
             errors.push(`${ticker}: ${err instanceof Error ? err.message : err}`);

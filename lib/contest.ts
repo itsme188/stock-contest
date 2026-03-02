@@ -506,3 +506,37 @@ export function validateTrade(
 
   return { valid: true };
 }
+
+// --- Price Staleness ---
+
+export function getPriceStaleness(
+  currentPrices: Record<string, number>,
+  priceHistory: Record<string, Record<string, number>>
+): { stale: boolean; latestDate: string | null; daysOld: number } {
+  const tickers = Object.keys(currentPrices);
+  if (tickers.length === 0) return { stale: false, latestDate: null, daysOld: 0 };
+
+  let oldestLatest: string | null = null;
+
+  for (const ticker of tickers) {
+    const history = priceHistory[ticker];
+    if (!history || Object.keys(history).length === 0) {
+      return { stale: true, latestDate: null, daysOld: Infinity };
+    }
+    const dates = Object.keys(history).sort();
+    const latest = dates[dates.length - 1];
+    if (!oldestLatest || latest < oldestLatest) {
+      oldestLatest = latest;
+    }
+  }
+
+  if (!oldestLatest) return { stale: true, latestDate: null, daysOld: Infinity };
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const latestMs = new Date(oldestLatest).getTime();
+  const daysOld = Math.floor((today.getTime() - latestMs) / 86400000);
+
+  // Stale if more than 1 calendar day old (allows for weekends: Friday prices on Saturday are OK)
+  return { stale: daysOld > 1, latestDate: oldestLatest, daysOld };
+}

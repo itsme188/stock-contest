@@ -19,6 +19,14 @@ log() {
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
 }
 
+notify_failure() {
+  local reason="$1"
+  log "ERROR: $reason"
+  log "=== Job failed ==="
+  osascript -e "display notification \"$reason\" with title \"Stock Contest\" subtitle \"Weekly Email Failed\"" 2>/dev/null || true
+  exit 1
+}
+
 # Check if prices are stale (any barDate < today)
 prices_are_fresh() {
   local response="$1"
@@ -51,11 +59,17 @@ else:
 
 log "=== Weekly email job started ==="
 
+# Backup database before any operations
+log "Running database backup..."
+if bash "$(dirname "$0")/backup-db.sh" >> "$LOG_FILE" 2>&1; then
+  log "Database backup completed"
+else
+  log "WARNING: Database backup failed (continuing anyway)"
+fi
+
 # Check if the server is running
-if ! curl -sf --max-time 5 "${BASE_URL}/api/contest" > /dev/null 2>&1; then
-  log "ERROR: Server not responding at ${BASE_URL}. Is the app running?"
-  log "=== Job failed ==="
-  exit 1
+if ! curl -sf --max-time 5 "${BASE_URL}/api/health" > /dev/null 2>&1; then
+  notify_failure "Server not responding at ${BASE_URL}. Is the app running?"
 fi
 
 log "Server is up at ${BASE_URL}"
@@ -65,9 +79,7 @@ log "Refreshing prices via Polygon..."
 PRICE_RESPONSE=$(curl -sf --max-time "$PRICE_TIMEOUT" \
   -X POST "${BASE_URL}/api/prices/update" \
   -H "Content-Type: application/json" 2>&1) || {
-  log "ERROR: Price update failed or timed out. Response: ${PRICE_RESPONSE:-<empty>}"
-  log "=== Job failed ==="
-  exit 1
+  notify_failure "Price update failed or timed out"
 }
 
 log "Price update response: ${PRICE_RESPONSE}"
@@ -134,9 +146,7 @@ EMAIL_RESPONSE=$(curl -sf --max-time "$EMAIL_TIMEOUT" \
   -X POST "${BASE_URL}/api/email/weekly" \
   -H "Content-Type: application/json" \
   -d '{}' 2>&1) || {
-  log "ERROR: Email send failed or timed out. Response: ${EMAIL_RESPONSE:-<empty>}"
-  log "=== Job failed ==="
-  exit 1
+  notify_failure "Email send failed or timed out"
 }
 
 log "Email response: ${EMAIL_RESPONSE}"
@@ -144,7 +154,5 @@ log "Email response: ${EMAIL_RESPONSE}"
 if echo "$EMAIL_RESPONSE" | grep -q '"ok":true'; then
   log "=== Weekly email sent successfully ==="
 else
-  log "ERROR: Email send returned unexpected response: ${EMAIL_RESPONSE}"
-  log "=== Job failed ==="
-  exit 1
+  notify_failure "Email returned unexpected response"
 fi

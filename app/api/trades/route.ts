@@ -32,6 +32,10 @@ export async function POST(request: Request) {
     if (typeof price !== "number" || price <= 0) {
       return NextResponse.json({ error: "Price must be a positive number" }, { status: 400 });
     }
+    const parsedTimestamp = new Date(date).getTime();
+    if (isNaN(parsedTimestamp)) {
+      return NextResponse.json({ error: "Invalid date format" }, { status: 400 });
+    }
 
     const upperTicker = ticker.toUpperCase();
 
@@ -53,7 +57,7 @@ export async function POST(request: Request) {
       shares,
       price,
       date,
-      timestamp: new Date(date).getTime(),
+      timestamp: parsedTimestamp,
     });
 
     return NextResponse.json({ ok: true, trade });

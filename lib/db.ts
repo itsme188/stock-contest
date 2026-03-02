@@ -86,7 +86,7 @@ function rowToTrade(row: TradeRow): Trade {
 
 // --- Migration: blob → trades table (one-time) ---
 
-function migrateTradesFromBlob(conn: Database.Database): void {
+export function migrateTradesFromBlob(conn: Database.Database): void {
   const count = conn.prepare("SELECT COUNT(*) as n FROM trades").get() as { n: number };
   if (count.n > 0) return; // Already migrated
 
@@ -191,6 +191,62 @@ function addAuditEntryWithConn(conn: Database.Database, action: string, detail: 
 
 export function addAuditEntry(action: string, detail: unknown): void {
   addAuditEntryWithConn(getDb(), action, detail);
+}
+
+export function getAuditLog(): { action: string; detail: string; created_at: string }[] {
+  const conn = getDb();
+  return conn.prepare("SELECT action, detail, created_at FROM audit_log ORDER BY id ASC").all() as {
+    action: string;
+    detail: string;
+    created_at: string;
+  }[];
+}
+
+// --- Database Health ---
+
+export function checkDbIntegrity(): boolean {
+  const conn = getDb();
+  const result = conn.pragma("integrity_check") as { integrity_check: string }[];
+  return result[0]?.integrity_check === "ok";
+}
+
+// --- Testing Support ---
+
+/** Replace the module-level DB singleton. Pass undefined to reset. Tests only. */
+export function _resetDbForTesting(newDb?: Database.Database): void {
+  db = newDb ?? null;
+}
+
+/** Initialize schema on an existing connection (used by tests with in-memory DBs). */
+export function _initSchema(conn: Database.Database): void {
+  conn.pragma("journal_mode = WAL");
+  conn.exec(`
+    CREATE TABLE IF NOT EXISTS contest_data (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    )
+  `);
+  conn.exec(`
+    CREATE TABLE IF NOT EXISTS trades (
+      id TEXT PRIMARY KEY,
+      player_id TEXT NOT NULL,
+      type TEXT NOT NULL CHECK(type IN ('buy', 'sell')),
+      ticker TEXT NOT NULL,
+      shares REAL NOT NULL CHECK(shares > 0),
+      price REAL NOT NULL CHECK(price > 0),
+      date TEXT NOT NULL,
+      timestamp INTEGER NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+  conn.exec(`
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      action TEXT NOT NULL,
+      detail TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
 }
 
 // --- Contest Data (settings, prices, players — NOT trades) ---

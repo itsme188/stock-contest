@@ -11,11 +11,35 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "trades must be an array" }, { status: 400 });
     }
 
-    // Basic shape validation for each trade
+    // Validate each trade: shape + types + values
     for (const t of trades as Trade[]) {
-      if (!t.playerId || !t.type || !t.ticker || !t.shares || !t.price || !t.date) {
+      if (!t.playerId || !t.type || !t.ticker || t.shares == null || t.price == null || !t.date) {
         return NextResponse.json(
           { error: `Invalid trade: missing fields in ${JSON.stringify(t)}` },
+          { status: 400 }
+        );
+      }
+      if (t.type !== "buy" && t.type !== "sell") {
+        return NextResponse.json(
+          { error: `Invalid trade type: ${t.type}` },
+          { status: 400 }
+        );
+      }
+      if (typeof t.shares !== "number" || t.shares <= 0) {
+        return NextResponse.json(
+          { error: `Invalid shares for ${t.ticker}: must be a positive number` },
+          { status: 400 }
+        );
+      }
+      if (typeof t.price !== "number" || t.price <= 0) {
+        return NextResponse.json(
+          { error: `Invalid price for ${t.ticker}: must be a positive number` },
+          { status: 400 }
+        );
+      }
+      if (isNaN(new Date(t.date).getTime())) {
+        return NextResponse.json(
+          { error: `Invalid date for ${t.ticker}: ${t.date}` },
           { status: 400 }
         );
       }
