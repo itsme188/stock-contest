@@ -11,6 +11,7 @@ import {
 
 const TWS_PORT = 7496;
 const TWS_HOST = "127.0.0.1";
+const CLIENT_ID = 2;
 const CONNECT_TIMEOUT_MS = 5000;
 const REQUEST_TIMEOUT_MS = 15000;
 
@@ -56,7 +57,7 @@ function fetchBarsFromIBKR(
   endDateTime: string,
   duration: string
 ): Promise<PriceBar[]> {
-  const ib = new IBApi({ port: TWS_PORT, host: TWS_HOST });
+  const ib = new IBApi({ port: TWS_PORT, host: TWS_HOST, clientId: CLIENT_ID });
 
   return new Promise((resolve, reject) => {
     const bars: PriceBar[] = [];

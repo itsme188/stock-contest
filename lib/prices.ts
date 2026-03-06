@@ -19,6 +19,7 @@ type PriceHistory = Record<string, Record<string, number>>;
 
 const TWS_PORT = 7496;
 const TWS_HOST = "127.0.0.1";
+const CLIENT_ID = 2;
 const CONNECT_TIMEOUT_MS = 5000;
 const REQUEST_TIMEOUT_MS = 15000;
 const PACE_DELAY_MS = 2000;
@@ -121,7 +122,7 @@ async function backfillViaIBKR(
   contestStartDate: string,
   priceHistory: PriceHistory
 ): Promise<BackfillResult> {
-  const ib = new IBApi({ port: TWS_PORT, host: TWS_HOST });
+  const ib = new IBApi({ port: TWS_PORT, host: TWS_HOST, clientId: CLIENT_ID });
 
   try {
     // Connect to TWS
