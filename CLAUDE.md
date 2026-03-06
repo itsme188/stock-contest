@@ -175,6 +175,7 @@ Seed data: 3 players, 17 trades, prices through Jan 30 — load via Settings > I
 - **IBKR error codes >= 2000 are warnings, not errors.** Code 2174 (timezone format) still returns data after the warning. The `onError` handler must skip codes >= 2000 or it will reject the promise before data arrives.
 - **IBKR `reqHistoricalData` endDateTime: use `""` (now) with calculated duration.** Passing a specific `endDateTime` like `"20260309 23:59:59"` triggers warning 2174 (timezone required). Using `""` with a duration that covers the target period avoids the issue entirely — this is the pattern used in `lib/prices.ts` and `app/api/prices/ibkr/route.ts`.
 - **Staleness/scope mismatch: always check the same set you update.** `getPriceStaleness` checked all tickers in `currentPrices` (append-only, includes closed positions), but refresh only updates open positions. The staleness indicator was permanently anchored to closed-position dates. Fix: pass the relevant ticker subset.
+- **`git worktree prune` does NOT delete directories.** It only cleans git's internal metadata for worktrees with missing/broken `.git` files. The actual directory and all its files remain on disk. Use `git worktree remove <path>` for full cleanup, or `rm -rf` followed by `prune`.
 - **Git merges from worktrees may not trigger Next.js hot-reload.** File timestamps from `git merge` don't always wake Turbopack's file watcher. Kill and restart the dev server after merging worktree changes: `lsof -ti:3001 | xargs kill`.
 
 ## Core Principles
