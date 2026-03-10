@@ -370,7 +370,7 @@ export default function StockContestTracker() {
   // --- Derived Data ---
 
   const leaderboard = getLeaderboard(players, trades, currentPrices);
-  const chartData = getPerformanceChartData(players, trades, currentPrices, priceHistory);
+  const chartData = getPerformanceChartData(players, trades, currentPrices, priceHistory, undefined, contestStartDate);
 
 
   // --- Render ---
@@ -475,6 +475,7 @@ export default function StockContestTracker() {
             leaderboard={leaderboard}
             chartData={chartData}
             setActiveTab={setActiveTab}
+            setShowAddTrade={setShowAddTrade}
             polygonApiKey={polygonApiKey}
           />
         )}

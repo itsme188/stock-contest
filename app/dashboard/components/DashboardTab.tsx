@@ -31,6 +31,7 @@ interface DashboardTabProps {
   leaderboard: LeaderboardEntry[];
   chartData: Record<string, string>[];
   setActiveTab: (tab: string) => void;
+  setShowAddTrade: (show: boolean) => void;
   polygonApiKey: string;
 }
 
@@ -44,6 +45,7 @@ export default function DashboardTab({
   leaderboard,
   chartData,
   setActiveTab,
+  setShowAddTrade,
   polygonApiKey,
 }: DashboardTabProps) {
   const [refreshing, setRefreshing] = useState(false);
@@ -123,8 +125,24 @@ export default function DashboardTab({
     <div className="space-y-6">
       {/* Leaderboard */}
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-        <div className="px-6 py-4 border-b border-gray-100">
+        <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
           <h2 className="text-lg font-semibold text-gray-900">Leaderboard</h2>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => { setActiveTab("trades"); setShowAddTrade(true); }}
+              className="px-3 py-1.5 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+            >
+              + Add Trade
+            </button>
+            <a
+              href="/email/preview"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors inline-block"
+            >
+              Weekly Email
+            </a>
+          </div>
         </div>
         <div className="divide-y divide-gray-100">
           {leaderboard.map((player, index) => (
@@ -196,6 +214,14 @@ export default function DashboardTab({
                 </span>
               )}
               <button
+                onClick={() => refreshPrices("ibkr")}
+                disabled={refreshing}
+                title="Fetch prices from IBKR Trader Workstation (must be running)"
+                className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                {refreshing && refreshSource === "ibkr" ? "Refreshing..." : "Refresh Prices"}
+              </button>
+              <button
                 onClick={() => {
                   if (!polygonApiKey) {
                     setRefreshStatus("Add Polygon API key in Settings first");
@@ -206,24 +232,16 @@ export default function DashboardTab({
                 disabled={refreshing}
                 className="px-3 py-1.5 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
-                {refreshing && refreshSource === "polygon" ? "Refreshing..." : "Refresh Prices"}
-              </button>
-              <button
-                onClick={() => refreshPrices("ibkr")}
-                disabled={refreshing}
-                title="Fetch prices from IBKR Trader Workstation (must be running)"
-                className="px-3 py-1.5 text-sm bg-gray-700 text-white rounded-lg hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              >
-                {refreshing && refreshSource === "ibkr" ? "Connecting..." : "IBKR"}
+                {refreshing && refreshSource === "polygon" ? "Refreshing..." : "Polygon"}
               </button>
               <button
                 onClick={() => {
                   const url = `https://finance.yahoo.com/quotes/${allOpenTickers.join(",")}/view/v1`;
                   window.open(url, "_blank");
                 }}
-                className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                className="px-3 py-1.5 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
               >
-                View All on Yahoo ↗
+                Yahoo ↗
               </button>
             </div>
           </div>

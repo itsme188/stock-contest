@@ -14,12 +14,8 @@ export default function EmailPreview() {
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const iframeRef = useRef<HTMLIFrameElement>(null);
-  const commentaryRef = useRef(commentary);
 
   const edited = commentary !== originalCommentary && originalCommentary !== "";
-
-  // Keep ref in sync so iframe event handler always reads latest
-  commentaryRef.current = commentary;
 
   const generatePreview = useCallback(async () => {
     setLoading(true);
@@ -43,6 +39,17 @@ export default function EmailPreview() {
   }, []);
 
   const sendEmail = async () => {
+    // Read commentary from iframe DOM to guarantee what-you-see-is-what-you-send
+    let commentaryToSend = commentary;
+    const doc = iframeRef.current?.contentDocument;
+    const commentaryDiv = doc?.getElementById("commentary");
+    if (commentaryDiv) {
+      const clone = commentaryDiv.cloneNode(true) as HTMLElement;
+      const iconEl = clone.querySelector("[data-edit-icon]");
+      if (iconEl) iconEl.remove();
+      commentaryToSend = htmlToCommentaryMarkdown(clone.innerHTML);
+    }
+
     setSending(true);
     setStatus("");
     setError("");
@@ -50,7 +57,7 @@ export default function EmailPreview() {
       const res = await fetch("/api/email/weekly", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ commentary }),
+        body: JSON.stringify({ commentary: commentaryToSend }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);

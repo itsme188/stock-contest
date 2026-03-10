@@ -802,6 +802,22 @@ describe("getPerformanceChartData", () => {
     expect(data[1].date).toBe("2026-01-15");
   });
 
+  it("filters dates before contestStartDate", () => {
+    const players = [{ id: PLAYER_A, name: "Alice", color: "#3B82F6" }];
+    const trades = [
+      makeTrade({ playerId: PLAYER_A, type: "buy", ticker: "AAPL", shares: 100, price: 100, date: "2026-01-10" }),
+    ];
+    const priceHistory = {
+      AAPL: { "2025-11-15": 90, "2025-12-15": 95, "2026-01-05": 98, "2026-01-10": 100, "2026-01-15": 120 },
+    };
+    const data = getPerformanceChartData(players, trades, {}, priceHistory, undefined, "2026-01-01");
+    // Only dates >= 2026-01-01: Jan 5, Jan 10, Jan 15
+    expect(data).toHaveLength(3);
+    expect(data[0].date).toBe("2026-01-05");
+    expect(data[1].date).toBe("2026-01-10");
+    expect(data[2].date).toBe("2026-01-15");
+  });
+
   it("each data point has returnPct for each player", () => {
     const players = [{ id: PLAYER_A, name: "Alice", color: "#3B82F6" }];
     const trades = [

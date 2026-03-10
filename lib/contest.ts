@@ -399,7 +399,8 @@ export function getPerformanceChartData(
   trades: Trade[],
   currentPrices: Record<string, number>,
   priceHistory: Record<string, Record<string, number>>,
-  today?: string
+  today?: string,
+  contestStartDate?: string
 ): Record<string, string>[] {
   if (players.length === 0 || trades.length === 0) return [];
 
@@ -414,7 +415,9 @@ export function getPerformanceChartData(
     dateSet.add(resolvedToday);
   }
 
-  const allDates = [...dateSet].sort();
+  const allDates = [...dateSet]
+    .sort()
+    .filter((d) => !contestStartDate || d >= contestStartDate);
 
   return allDates.map((date) => {
     const dataPoint: Record<string, string> = { date };
