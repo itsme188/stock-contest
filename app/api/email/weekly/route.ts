@@ -61,6 +61,9 @@ export async function POST(request: Request) {
     const marketContext = preGenerated
       ? "" // VK context already baked into pre-generated commentary
       : await fetchVitalKnowledge(gmailAddress, gmailAppPassword);
+    if (!preGenerated) {
+      console.log(`[Weekly Email] VK market context: ${marketContext ? `${marketContext.length} chars` : "empty (fetch failed)"}`);
+    }
     const commentary =
       preGenerated ||
       (await generateCommentary(reportData, anthropicApiKey, aiModel, marketContext));

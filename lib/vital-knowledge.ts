@@ -84,10 +84,10 @@ export async function fetchVitalKnowledge(
 
         if (!msg || !msg.bodyStructure) continue;
 
-        // Prefer text/plain, fall back to text/html
-        const partId =
-          findPart(msg.bodyStructure, "text/plain") ??
-          findPart(msg.bodyStructure, "text/html");
+        // Prefer text/html (stripped) — newsletter text/plain is full of image URLs and junk
+        const htmlPartId = findPart(msg.bodyStructure, "text/html");
+        const plainPartId = findPart(msg.bodyStructure, "text/plain");
+        const partId = htmlPartId ?? plainPartId;
         if (!partId) continue;
 
         const { content } = await client.download(String(uid), partId, { uid: true });
@@ -97,8 +97,8 @@ export async function fetchVitalKnowledge(
         }
         let body = Buffer.concat(chunks).toString("utf-8");
 
-        // Strip HTML if we fell back to text/html
-        if (!findPart(msg.bodyStructure, "text/plain")) {
+        // Strip HTML tags when using the HTML part
+        if (htmlPartId && partId === htmlPartId) {
           body = stripHtml(body);
         }
 

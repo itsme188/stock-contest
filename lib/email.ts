@@ -210,6 +210,7 @@ STRICT RULES:
 - Do NOT use any of these words/phrases: ${BANNED_WORDS.map((w) => `"${w}"`).join(", ")}
 - Never use the "it's not X, it's Y" rhetorical construction
 - No flattery, no superlatives, no glazing -- just state what happened
+- NEVER claim a ticker is held by all players or "across all portfolios" unless it literally appears in every player's Positions list above. Each player's holdings are listed individually — check before generalizing.
 - Keep it under 200 words
 
 Current standings as of ${reportDate}:

@@ -30,6 +30,7 @@ export async function POST() {
     const marketContext = gmailAddress && gmailAppPassword
       ? await fetchVitalKnowledge(gmailAddress, gmailAppPassword)
       : "";
+    console.log(`[Email Preview] VK market context: ${marketContext ? `${marketContext.length} chars` : "empty (no credentials or fetch failed)"}`);
     const commentary = await generateCommentary(reportData, anthropicApiKey, aiModel, marketContext);
     const html = buildEmailHtml(reportData, commentary);
 
