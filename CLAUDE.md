@@ -130,6 +130,8 @@ Originally a single-file React app (Jan 14, 2026), ported to this Next.js projec
 
 **Mar 10**: Email edit bug fix + dashboard UX. Fixed email preview edits lost on send — `sendEmail()` now reads commentary from iframe DOM (cloned node) instead of relying on React state closure. Reorganized price refresh buttons: IBKR first (blue/primary), Polygon second (green), Yahoo third (outline). Added quick actions to Leaderboard header: "+ Add Trade" (switches to Trades tab + opens modal) and "Weekly Email" (opens `/email/preview` in new tab). Filtered performance chart to `contestStartDate`, removing ~6 weeks of flat 0% pre-contest data. 232 tests.
 
+**Mar 13**: Fixed weekly email quality: AI was claiming LFMD held "across all three portfolios" (only 2 of 3 own it) — added prompt guardrail against false position attribution. VK market context wasn't being used by the AI because `text/plain` MIME part of newsletter emails is full of image URLs and junk headers; switched to prefer `text/html` (stripped) which gives clean market data. Added VK fetch logging to email routes for diagnostics. 232 tests.
+
 Seed data: 3 players, 17 trades, prices through Jan 30 — load via Settings > Import from `data/stock-contest-2026-01-30.json`.
 
 ## Known Limitations
@@ -180,6 +182,9 @@ Seed data: 3 players, 17 trades, prices through Jan 30 — load via Settings > I
 - **`git worktree prune` does NOT delete directories.** It only cleans git's internal metadata for worktrees with missing/broken `.git` files. The actual directory and all its files remain on disk. Use `git worktree remove <path>` for full cleanup, or `rm -rf` followed by `prune`.
 - **Git merges from worktrees may not trigger Next.js hot-reload.** File timestamps from `git merge` don't always wake Turbopack's file watcher. Kill and restart the dev server after merging worktree changes: `lsof -ti:3001 | xargs kill`.
 - **contentEditable + React state = stale closures.** DOM input events from iframes call `setState()` asynchronously. If a send/submit handler captures state from its closure, it may read the pre-edit value. Fix: read directly from the DOM at action time (clone the node to avoid mutating live content), fall back to React state. Belt-and-suspenders pattern.
+- **Newsletter text/plain MIME parts are often junk.** Many email services generate a `text/plain` fallback full of image URLs and "email doesn't support HTML" headers. For machine consumption (feeding to an LLM), stripped `text/html` produces far better text. Prefer HTML for newsletters.
+- **AI prompt data quality matters as much as instructions.** When VK context was 8000 chars of noisy plain text, the AI ignored the "use market context" instruction entirely. Same 8000 chars as clean stripped HTML → the AI wove in specific market references. Clean input → model follows instructions.
+- **AI will generalize beyond its data unless explicitly told not to.** Even with per-player position lists, the model claimed a ticker was held "across all portfolios." Adding a strict rule ("check before generalizing") fixed it. Never assume the model will cross-reference data sections on its own.
 
 ## Core Principles
 
