@@ -66,7 +66,12 @@ export default function DashboardTab({
     });
     const count = Object.keys(data.updated).length;
     const msg = `Updated ${count} price${count !== 1 ? "s" : ""} via ${source}`;
-    setRefreshStatus(data.errors?.length ? `${msg} (${data.errors.length} failed)` : msg);
+    if (data.errors?.length) {
+      const failedTickers = data.errors.map(e => e.split(':')[0].trim());
+      setRefreshStatus(`${msg} (failed: ${failedTickers.join(', ')})`);
+    } else {
+      setRefreshStatus(msg);
+    }
     setLastRefreshed(new Date().toLocaleString());
   };
 
