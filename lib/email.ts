@@ -328,7 +328,7 @@ export function buildEmailHtml(
                 const price = getCurrentPrice(pos.ticker, currentPrices, trades);
                 const currentValue = pos.shares * price;
                 const gain = currentValue - pos.totalCost;
-                const gainPct = (gain / pos.totalCost) * 100;
+                const gainPct = pos.totalCost !== 0 ? (gain / pos.totalCost) * 100 : 0;
                 const gainColor = gain >= 0 ? "#059669" : "#DC2626";
                 const barWidth = Math.min(Math.abs(gainPct), 100);
                 return `<tr style="border-bottom: 1px solid #F3F4F6;">
@@ -509,7 +509,7 @@ export function buildPlainText(
       stats.positions.forEach((pos) => {
         const price = getCurrentPrice(pos.ticker, currentPrices, trades);
         const gain = pos.shares * price - pos.totalCost;
-        const gainPct = (gain / pos.totalCost) * 100;
+        const gainPct = pos.totalCost !== 0 ? (gain / pos.totalCost) * 100 : 0;
         lines.push(
           `  ${pos.ticker}: ${pos.shares} shares @ ${formatCurrency(pos.avgCost)} now ${formatCurrency(price)} (${gain >= 0 ? "+" : ""}${formatCurrency(gain)}, ${formatPercent(gainPct)})`
         );

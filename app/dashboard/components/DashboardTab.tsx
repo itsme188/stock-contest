@@ -437,7 +437,7 @@ export default function DashboardTab({
                     );
                     const currentValue = pos.shares * price;
                     const gain = currentValue - pos.totalCost;
-                    const gainPct = (gain / pos.totalCost) * 100;
+                    const gainPct = pos.totalCost !== 0 ? (gain / pos.totalCost) * 100 : 0;
                     return (
                       <div key={pos.ticker} className="text-sm">
                         <div className="flex justify-between">

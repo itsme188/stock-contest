@@ -86,6 +86,8 @@ function fetchClosingPrice(
     };
 
     const onError = (err: Error, code: number, id: number) => {
+      // Codes >= 2000 are warnings (e.g., 2174 = timezone format), not errors
+      if (code >= 2000) return;
       if (id === reqId || id === -1) {
         cleanup();
         reject(new Error(`IBKR error ${code} for ${symbol}: ${err.message}`));

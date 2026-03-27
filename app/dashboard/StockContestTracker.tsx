@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   type Player,
   type Trade,
@@ -369,8 +369,8 @@ export default function StockContestTracker() {
 
   // --- Derived Data ---
 
-  const leaderboard = getLeaderboard(players, trades, currentPrices);
-  const chartData = getPerformanceChartData(players, trades, currentPrices, priceHistory, undefined, contestStartDate);
+  const leaderboard = useMemo(() => getLeaderboard(players, trades, currentPrices), [players, trades, currentPrices]);
+  const chartData = useMemo(() => getPerformanceChartData(players, trades, currentPrices, priceHistory, undefined, contestStartDate), [players, trades, currentPrices, priceHistory, contestStartDate]);
 
 
   // --- Render ---

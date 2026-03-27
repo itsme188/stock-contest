@@ -13,8 +13,15 @@ export async function POST(request: Request) {
   try {
     const body = await request.json().catch(() => ({}));
 
-    // Backfill price history so "this week" calculations are accurate
-    await backfillPrices();
+    // Backfill price history so "this week" calculations are accurate (90s timeout)
+    try {
+      await Promise.race([
+        backfillPrices(),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Backfill timed out")), 90_000)),
+      ]);
+    } catch (err) {
+      console.warn(`[Weekly Email] Backfill issue: ${err instanceof Error ? err.message : err}. Proceeding with available prices.`);
+    }
 
     const contestData = getContestData();
     const players = contestData.players as Player[];
