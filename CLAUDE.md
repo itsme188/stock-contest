@@ -30,7 +30,7 @@ npm run email:status    # Check if launchd job is loaded
 - **AI**: @anthropic-ai/sdk (Claude Sonnet for weekly email commentary)
 - **Prices**: Polygon.io API (free tier, 5 calls/min) + IBKR TWS fallback via @stoqey/ib
 - **Market Context**: Vital Knowledge email digests via IMAP (imapflow)
-- **Testing**: Vitest (203 tests)
+- **Testing**: Vitest (252 tests)
 
 ## Architecture
 
@@ -132,6 +132,8 @@ Originally a single-file React app (Jan 14, 2026), ported to this Next.js projec
 
 **Mar 13**: Fixed weekly email quality: AI was claiming LFMD held "across all three portfolios" (only 2 of 3 own it) — added prompt guardrail against false position attribution. VK market context wasn't being used by the AI because `text/plain` MIME part of newsletter emails is full of image URLs and junk headers; switched to prefer `text/html` (stripped) which gives clean market data. Added VK fetch logging to email routes for diagnostics. 232 tests.
 
+**Mar 27**: Fixed Vital Knowledge silent failure — `imapflow` wasn't in `serverExternalPackages`, so Turbopack couldn't bundle it and VK fetch returned "" silently. Full project audit found IBKR error code >= 2000 bug in `lib/prices.ts` and `app/api/prices/ibkr/route.ts` (warnings treated as fatal errors, causing backfill to reject valid data). Added division-by-zero guards on `gainPct` (3 locations), expanded `serverExternalPackages` to include `better-sqlite3`, `@stoqey/ib`, `nodemailer`. Added 90s timeout on `backfillPrices()` in email routes. Memoized leaderboard/chartData with `useMemo`. New tests for `lib/prices.ts` (7) and `lib/commentary.ts` (13). 252 tests.
+
 Seed data: 3 players, 17 trades, prices through Jan 30 — load via Settings > Import from `data/stock-contest-2026-01-30.json`.
 
 ## Known Limitations
@@ -185,6 +187,9 @@ Seed data: 3 players, 17 trades, prices through Jan 30 — load via Settings > I
 - **Newsletter text/plain MIME parts are often junk.** Many email services generate a `text/plain` fallback full of image URLs and "email doesn't support HTML" headers. For machine consumption (feeding to an LLM), stripped `text/html` produces far better text. Prefer HTML for newsletters.
 - **AI prompt data quality matters as much as instructions.** When VK context was 8000 chars of noisy plain text, the AI ignored the "use market context" instruction entirely. Same 8000 chars as clean stripped HTML → the AI wove in specific market references. Clean input → model follows instructions.
 - **AI will generalize beyond its data unless explicitly told not to.** Even with per-player position lists, the model claimed a ticker was held "across all portfolios." Adding a strict rule ("check before generalizing") fixed it. Never assume the model will cross-reference data sections on its own.
+- **Packages using Node.js native modules (`net`, `tls`, native addons) need `serverExternalPackages`.** Turbopack can't bundle them. If the import is inside a try/catch (like `fetchVitalKnowledge`), the bundling failure is silent — the function just returns a default value. Always declare `imapflow`, `better-sqlite3`, `@stoqey/ib`, `nodemailer` as external.
+- **Apply the same fix everywhere, not just the first place you find it.** The IBKR `code >= 2000` warning skip existed in `app/api/prices/route.ts` but was missing from `lib/prices.ts` and `app/api/prices/ibkr/route.ts`. Grep for the pattern across the whole project.
+- **Wrap long-running calls with timeouts in API routes.** `backfillPrices()` could hang if IBKR is slow and Polygon batches take 61s each. Use `Promise.race` with a timeout, catch and warn, proceed with available data.
 
 ## Core Principles
 
