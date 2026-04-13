@@ -400,11 +400,13 @@ export function getPerformanceChartData(
   currentPrices: Record<string, number>,
   priceHistory: Record<string, Record<string, number>>,
   today?: string,
-  contestStartDate?: string
+  contestStartDate?: string,
+  benchmarkHistory?: Record<string, number>
 ): Record<string, string>[] {
   if (players.length === 0 || trades.length === 0) return [];
 
   const resolvedToday = today || new Date().toISOString().split("T")[0];
+  const resolvedStart = contestStartDate || "2026-01-01";
 
   const dateSet = new Set<string>(trades.map((t) => t.date));
   Object.values(priceHistory).forEach((tickerHistory) => {
@@ -436,6 +438,18 @@ export function getPerformanceChartData(
         ((totalValue - STARTING_CASH) / STARTING_CASH) * 100;
       dataPoint[player.name] = returnPct.toFixed(2);
     });
+
+    // Add S&P 500 benchmark return if data available
+    if (benchmarkHistory) {
+      const benchmarkReturn = getBenchmarkReturnAtDate(
+        date,
+        benchmarkHistory,
+        resolvedStart
+      );
+      if (benchmarkReturn !== null) {
+        dataPoint["S&P 500"] = benchmarkReturn.toFixed(2);
+      }
+    }
 
     return dataPoint;
   });
@@ -508,6 +522,138 @@ export function validateTrade(
   }
 
   return { valid: true };
+}
+
+// --- Period Returns ---
+
+export type Period = "1D" | "1W" | "1M" | "YTD" | "ALL";
+
+export function getPeriodStartDate(
+  period: Period,
+  contestStartDate: string,
+  today?: string
+): string {
+  const t = today ? new Date(today + "T12:00:00") : new Date();
+  switch (period) {
+    case "1D": {
+      const d = new Date(t);
+      d.setDate(d.getDate() - 1);
+      return d.toISOString().split("T")[0];
+    }
+    case "1W": {
+      const d = new Date(t);
+      d.setDate(d.getDate() - 7);
+      return d.toISOString().split("T")[0];
+    }
+    case "1M": {
+      const d = new Date(t);
+      d.setDate(d.getDate() - 30);
+      return d.toISOString().split("T")[0];
+    }
+    case "YTD": {
+      return `${t.getFullYear()}-01-01`;
+    }
+    case "ALL":
+      return contestStartDate;
+  }
+}
+
+export function getPeriodReturn(
+  playerId: string,
+  period: Period,
+  trades: Trade[],
+  currentPrices: Record<string, number>,
+  priceHistory: Record<string, Record<string, number>>,
+  contestStartDate: string,
+  today?: string
+): { returnPct: number; returnDollar: number } {
+  const stats = getPlayerStats(playerId, trades, currentPrices);
+  const currentValue = stats.totalValue;
+
+  if (period === "ALL") {
+    return {
+      returnDollar: currentValue - STARTING_CASH,
+      returnPct: ((currentValue - STARTING_CASH) / STARTING_CASH) * 100,
+    };
+  }
+
+  const startDate = getPeriodStartDate(period, contestStartDate, today);
+  const previousValue = getPlayerValueAtDate(
+    playerId,
+    startDate,
+    trades,
+    priceHistory
+  );
+
+  if (previousValue === 0) {
+    return { returnDollar: 0, returnPct: 0 };
+  }
+
+  return {
+    returnDollar: currentValue - previousValue,
+    returnPct: ((currentValue - previousValue) / previousValue) * 100,
+  };
+}
+
+// --- Position Enrichment ---
+
+export function getPositionDailyChange(
+  ticker: string,
+  currentPrice: number,
+  priceHistory: Record<string, Record<string, number>>
+): { changeDollar: number; changePct: number } | null {
+  const history = priceHistory[ticker];
+  if (!history) return null;
+
+  const dates = Object.keys(history).sort();
+  if (dates.length === 0) return null;
+
+  // Get the most recent historical price (yesterday or last trading day)
+  const previousPrice = history[dates[dates.length - 1]];
+  if (!previousPrice || previousPrice === 0) return null;
+
+  return {
+    changeDollar: currentPrice - previousPrice,
+    changePct: ((currentPrice - previousPrice) / previousPrice) * 100,
+  };
+}
+
+export function getPositionDaysHeld(position: Position, today?: string): number {
+  const buyTrades = position.trades.filter((t) => t.type === "buy");
+  if (buyTrades.length === 0) return 0;
+
+  const earliest = buyTrades.reduce((min, t) =>
+    t.date < min.date ? t : min
+  );
+
+  // Use UTC to avoid DST issues
+  const todayDate = today ? new Date(today + "T00:00:00Z") : new Date();
+  const buyDate = new Date(earliest.date + "T00:00:00Z");
+  return Math.round((todayDate.getTime() - buyDate.getTime()) / 86400000);
+}
+
+// --- Benchmark ---
+
+export const BENCHMARK_KEY = "__BENCHMARK_SPY";
+
+export function getBenchmarkReturnAtDate(
+  date: string,
+  benchmarkHistory: Record<string, number>,
+  contestStartDate: string
+): number | null {
+  const startPrice = getPriceAtDate(
+    BENCHMARK_KEY,
+    contestStartDate,
+    { [BENCHMARK_KEY]: benchmarkHistory }
+  );
+  const datePrice = getPriceAtDate(
+    BENCHMARK_KEY,
+    date,
+    { [BENCHMARK_KEY]: benchmarkHistory }
+  );
+
+  if (!startPrice || !datePrice) return null;
+  return ((datePrice - startPrice) / startPrice) * 100;
 }
 
 // --- Price Staleness ---

@@ -1,5 +1,5 @@
 import { getContestData, saveContestData } from "@/lib/db";
-import { type Trade } from "@/lib/contest";
+import { type Trade, BENCHMARK_KEY } from "@/lib/contest";
 import {
   IBApi,
   EventName,
@@ -251,6 +251,32 @@ async function backfillViaPolygon(
   }
 
   return { tickers: allTickers.length, daysAdded, errors };
+}
+
+export async function backfillBenchmark(): Promise<BackfillResult> {
+  const contestData = getContestData();
+  const { polygonApiKey, contestStartDate } = contestData;
+  const priceHistory = { ...contestData.priceHistory };
+
+  let result: BackfillResult;
+
+  // Try IBKR first (primary), Polygon as fallback
+  try {
+    result = await backfillViaIBKR(["SPY"], contestStartDate, priceHistory);
+  } catch {
+    if (!polygonApiKey) {
+      return { tickers: 0, daysAdded: 0, errors: ["No price source available (TWS not running, no Polygon API key)"] };
+    }
+    result = await backfillViaPolygon(["SPY"], contestStartDate, polygonApiKey, priceHistory);
+  }
+
+  // backfillVia* stores under "SPY" — copy to the benchmark key the dashboard reads
+  if (priceHistory["SPY"]) {
+    priceHistory[BENCHMARK_KEY] = { ...(priceHistory[BENCHMARK_KEY] || {}), ...priceHistory["SPY"] };
+  }
+
+  saveContestData({ priceHistory });
+  return result;
 }
 
 export async function backfillPrices(): Promise<BackfillResult> {

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   Trade,
+  Position,
   getPlayerPositions,
   getOpenPositionCount,
   canAddPosition,
@@ -13,10 +14,16 @@ import {
   getPlayerValueAtDate,
   getPerformanceChartData,
   getPriceStaleness,
+  getPeriodReturn,
+  getPeriodStartDate,
+  getPositionDailyChange,
+  getPositionDaysHeld,
+  getBenchmarkReturnAtDate,
   formatCurrency,
   formatPercent,
   validateTrade,
   STARTING_CASH,
+  BENCHMARK_KEY,
 } from "@/lib/contest";
 
 // --- Helpers ---
@@ -1067,5 +1074,238 @@ describe("getPriceStaleness", () => {
     // Without filter, WW drags it to stale
     expect(result.stale).toBe(true);
     expect(result.latestDate).toBe("2026-01-22");
+  });
+});
+
+// --- getPeriodStartDate ---
+
+describe("getPeriodStartDate", () => {
+  it("1D returns yesterday", () => {
+    expect(getPeriodStartDate("1D", "2026-01-01", "2026-04-13")).toBe("2026-04-12");
+  });
+
+  it("1W returns 7 days ago", () => {
+    expect(getPeriodStartDate("1W", "2026-01-01", "2026-04-13")).toBe("2026-04-06");
+  });
+
+  it("1M returns 30 days ago", () => {
+    expect(getPeriodStartDate("1M", "2026-01-01", "2026-04-13")).toBe("2026-03-14");
+  });
+
+  it("YTD returns January 1 of the same year", () => {
+    expect(getPeriodStartDate("YTD", "2026-01-01", "2026-04-13")).toBe("2026-01-01");
+  });
+
+  it("ALL returns contestStartDate", () => {
+    expect(getPeriodStartDate("ALL", "2026-01-15", "2026-04-13")).toBe("2026-01-15");
+  });
+});
+
+// --- getPeriodReturn ---
+
+describe("getPeriodReturn", () => {
+  const priceHistory = {
+    AAPL: {
+      "2026-01-10": 100,
+      "2026-04-06": 115,
+      "2026-04-12": 118,
+    },
+  };
+
+  const trades = [
+    makeTrade({ playerId: PLAYER_A, type: "buy", ticker: "AAPL", shares: 100, price: 100, date: "2026-01-10" }),
+  ];
+
+  it("ALL period returns total return from STARTING_CASH", () => {
+    const result = getPeriodReturn(PLAYER_A, "ALL", trades, { AAPL: 120 }, priceHistory, "2026-01-01", "2026-04-13");
+    // totalValue = 90000 + 12000 = 102000, return = 2000
+    expect(result.returnDollar).toBe(2000);
+    expect(result.returnPct).toBeCloseTo(2.0, 1);
+  });
+
+  it("1D period compares to yesterday's portfolio value", () => {
+    const result = getPeriodReturn(PLAYER_A, "1D", trades, { AAPL: 120 }, priceHistory, "2026-01-01", "2026-04-13");
+    // Yesterday (2026-04-12): value = 90000 + 100*118 = 101800
+    // Today: value = 90000 + 100*120 = 102000
+    // Return = (102000 - 101800) / 101800 * 100
+    expect(result.returnDollar).toBeCloseTo(200, 0);
+    expect(result.returnPct).toBeCloseTo(0.1965, 1);
+  });
+
+  it("1W period compares to 7 days ago", () => {
+    const result = getPeriodReturn(PLAYER_A, "1W", trades, { AAPL: 120 }, priceHistory, "2026-01-01", "2026-04-13");
+    // 7 days ago (2026-04-06): value = 90000 + 100*115 = 101500
+    // Today: value = 102000
+    expect(result.returnDollar).toBeCloseTo(500, 0);
+  });
+
+  it("returns 0 when previous value is 0", () => {
+    // Player with no trades → previous value = STARTING_CASH (not 0), so this tests a different edge
+    const result = getPeriodReturn(PLAYER_A, "1D", [], {}, {}, "2026-01-01", "2026-04-13");
+    expect(result.returnDollar).toBe(0);
+    expect(result.returnPct).toBe(0);
+  });
+});
+
+// --- getPositionDailyChange ---
+
+describe("getPositionDailyChange", () => {
+  it("returns dollar and percent change from most recent historical price", () => {
+    const priceHistory = {
+      AAPL: { "2026-04-11": 118, "2026-04-12": 119 },
+    };
+    const result = getPositionDailyChange("AAPL", 121, priceHistory);
+    expect(result).not.toBeNull();
+    expect(result!.changeDollar).toBeCloseTo(2, 2);
+    expect(result!.changePct).toBeCloseTo((2 / 119) * 100, 2);
+  });
+
+  it("returns null when no price history exists", () => {
+    expect(getPositionDailyChange("AAPL", 120, {})).toBeNull();
+  });
+
+  it("returns null when price history is empty for ticker", () => {
+    expect(getPositionDailyChange("AAPL", 120, { AAPL: {} })).toBeNull();
+  });
+
+  it("handles negative daily change", () => {
+    const priceHistory = { AAPL: { "2026-04-12": 125 } };
+    const result = getPositionDailyChange("AAPL", 120, priceHistory);
+    expect(result!.changeDollar).toBe(-5);
+    expect(result!.changePct).toBeCloseTo(-4, 0);
+  });
+});
+
+// --- getPositionDaysHeld ---
+
+describe("getPositionDaysHeld", () => {
+  it("returns days since first buy trade", () => {
+    const position: Position = {
+      ticker: "AAPL",
+      shares: 100,
+      avgCost: 100,
+      totalCost: 10000,
+      trades: [
+        makeTrade({ playerId: PLAYER_A, type: "buy", ticker: "AAPL", shares: 100, price: 100, date: "2026-03-01" }),
+      ],
+    };
+    const days = getPositionDaysHeld(position, "2026-04-13");
+    expect(days).toBe(43);
+  });
+
+  it("uses earliest buy when multiple buys exist", () => {
+    const position: Position = {
+      ticker: "AAPL",
+      shares: 200,
+      avgCost: 105,
+      totalCost: 21000,
+      trades: [
+        makeTrade({ playerId: PLAYER_A, type: "buy", ticker: "AAPL", shares: 100, price: 100, date: "2026-03-01" }),
+        makeTrade({ playerId: PLAYER_A, type: "buy", ticker: "AAPL", shares: 100, price: 110, date: "2026-03-15" }),
+      ],
+    };
+    const days = getPositionDaysHeld(position, "2026-04-13");
+    expect(days).toBe(43); // from March 1, not March 15
+  });
+
+  it("ignores sell trades for date calculation", () => {
+    const position: Position = {
+      ticker: "AAPL",
+      shares: 50,
+      avgCost: 100,
+      totalCost: 5000,
+      trades: [
+        makeTrade({ playerId: PLAYER_A, type: "buy", ticker: "AAPL", shares: 100, price: 100, date: "2026-03-01" }),
+        makeTrade({ playerId: PLAYER_A, type: "sell", ticker: "AAPL", shares: 50, price: 120, date: "2026-04-01" }),
+      ],
+    };
+    const days = getPositionDaysHeld(position, "2026-04-13");
+    expect(days).toBe(43); // still from March 1 (first buy)
+  });
+
+  it("returns 0 when no buy trades (edge case)", () => {
+    const position: Position = {
+      ticker: "AAPL",
+      shares: 0,
+      avgCost: 0,
+      totalCost: 0,
+      trades: [],
+    };
+    expect(getPositionDaysHeld(position, "2026-04-13")).toBe(0);
+  });
+});
+
+// --- getBenchmarkReturnAtDate ---
+
+describe("getBenchmarkReturnAtDate", () => {
+  const benchmarkHistory: Record<string, number> = {
+    "2026-01-02": 580,
+    "2026-01-15": 590,
+    "2026-02-15": 600,
+    "2026-03-15": 610,
+    "2026-04-13": 620,
+  };
+
+  it("computes return % from contest start to given date", () => {
+    const result = getBenchmarkReturnAtDate("2026-04-13", benchmarkHistory, "2026-01-01");
+    // Start price at 2026-01-01 → falls back to 2026-01-02 = 580 (nearest before)
+    // Actually getPriceAtDate looks for <= date, so 2026-01-01 has no entry before it
+    // Let's use 2026-01-02 as contest start for clarity
+    const result2 = getBenchmarkReturnAtDate("2026-04-13", benchmarkHistory, "2026-01-02");
+    // (620 - 580) / 580 * 100 = 6.897%
+    expect(result2).toBeCloseTo(6.897, 1);
+  });
+
+  it("returns null when no benchmark data before contest start", () => {
+    const result = getBenchmarkReturnAtDate("2026-04-13", {}, "2026-01-01");
+    expect(result).toBeNull();
+  });
+
+  it("returns null when no benchmark data for target date", () => {
+    const result = getBenchmarkReturnAtDate("2025-12-01", benchmarkHistory, "2026-01-02");
+    expect(result).toBeNull();
+  });
+
+  it("returns 0% at contest start date", () => {
+    const result = getBenchmarkReturnAtDate("2026-01-02", benchmarkHistory, "2026-01-02");
+    expect(result).toBeCloseTo(0, 5);
+  });
+});
+
+// --- getPerformanceChartData with benchmark ---
+
+describe("getPerformanceChartData with benchmark", () => {
+  it("adds S&P 500 key to data points when benchmark provided", () => {
+    const players = [{ id: PLAYER_A, name: "Alice", color: "#3B82F6" }];
+    const trades = [
+      makeTrade({ playerId: PLAYER_A, type: "buy", ticker: "AAPL", shares: 100, price: 100, date: "2026-01-10" }),
+    ];
+    const priceHistory = { AAPL: { "2026-01-10": 100, "2026-01-15": 120 } };
+    const benchmarkHistory = { "2026-01-10": 580, "2026-01-15": 590 };
+
+    const data = getPerformanceChartData(
+      players, trades, {}, priceHistory, undefined, "2026-01-10", benchmarkHistory
+    );
+
+    expect(data.length).toBeGreaterThan(0);
+    // The first data point should have S&P 500 = 0% (same date as start)
+    const firstPoint = data.find(d => d.date === "2026-01-10");
+    expect(firstPoint).toBeDefined();
+    expect(firstPoint!["S&P 500"]).toBeDefined();
+    expect(parseFloat(firstPoint!["S&P 500"])).toBeCloseTo(0, 1);
+
+    // Later point should show positive return
+    const laterPoint = data.find(d => d.date === "2026-01-15");
+    expect(laterPoint).toBeDefined();
+    expect(parseFloat(laterPoint!["S&P 500"])).toBeCloseTo((590 - 580) / 580 * 100, 1);
+  });
+
+  it("omits S&P 500 key when no benchmark provided", () => {
+    const players = [{ id: PLAYER_A, name: "Alice", color: "#3B82F6" }];
+    const trades = [
+      makeTrade({ playerId: PLAYER_A, type: "buy", ticker: "AAPL", shares: 100, price: 100, date: "2026-01-10" }),
+    ];
+    const data = getPerformanceChartData(players, trades, {}, {});
+    expect(data[0]).not.toHaveProperty("S&P 500");
   });
 });

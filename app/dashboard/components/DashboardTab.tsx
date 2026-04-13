@@ -1,25 +1,20 @@
 import React, { useState } from "react";
 import {
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  Legend,
-  ResponsiveContainer,
-} from "recharts";
-import {
   type Player,
   type Trade,
   type LeaderboardEntry,
+  type Period,
+  BENCHMARK_KEY,
   getPlayerPositions,
   getLatestTradePrice,
-  getCurrentPrice,
   getPriceStaleness,
+  getPeriodReturn,
   formatCurrency,
   formatPercent,
 } from "@/lib/contest";
+import PeriodSelector from "./PeriodSelector";
+import PerformanceChart from "./PerformanceChart";
+import PlayerDetailCard from "./PlayerDetailCard";
 
 interface DashboardTabProps {
   players: Player[];
@@ -33,6 +28,7 @@ interface DashboardTabProps {
   setActiveTab: (tab: string) => void;
   setShowAddTrade: (show: boolean) => void;
   polygonApiKey: string;
+  contestStartDate: string;
 }
 
 export default function DashboardTab({
@@ -47,11 +43,16 @@ export default function DashboardTab({
   setActiveTab,
   setShowAddTrade,
   polygonApiKey,
+  contestStartDate,
 }: DashboardTabProps) {
   const [refreshing, setRefreshing] = useState(false);
   const [refreshSource, setRefreshSource] = useState<"polygon" | "ibkr" | null>(null);
   const [refreshStatus, setRefreshStatus] = useState("");
   const [lastRefreshed, setLastRefreshed] = useState<string | null>(null);
+  const [selectedPeriod, setSelectedPeriod] = useState<Period>("ALL");
+  const [loadingBenchmark, setLoadingBenchmark] = useState(false);
+
+  const hasBenchmark = !!(priceHistory[BENCHMARK_KEY] && Object.keys(priceHistory[BENCHMARK_KEY]).length > 0);
 
   const applyPriceUpdate = (data: { updated: Record<string, number>; date: string; errors?: string[] }, source: string) => {
     setCurrentPrices((prev) => ({ ...prev, ...data.updated }));
@@ -104,6 +105,28 @@ export default function DashboardTab({
     }
   };
 
+  const loadBenchmark = async () => {
+    setLoadingBenchmark(true);
+    setRefreshStatus("Loading S&P 500 benchmark data...");
+    try {
+      const res = await fetch("/api/prices/benchmark", { method: "POST" });
+      const data = await res.json();
+      if (res.ok) {
+        setPriceHistory((prev) => ({
+          ...prev,
+          [BENCHMARK_KEY]: { ...(prev[BENCHMARK_KEY] || {}), ...data.prices },
+        }));
+        setRefreshStatus(`Loaded ${data.daysLoaded} days of S&P 500 data`);
+      } else {
+        setRefreshStatus(`Error: ${data.error}`);
+      }
+    } catch (err) {
+      setRefreshStatus(`Error: ${err instanceof Error ? err.message : err}`);
+    } finally {
+      setLoadingBenchmark(false);
+    }
+  };
+
   if (players.length === 0) {
     return (
       <div className="bg-white rounded-xl border border-gray-200 p-12 text-center">
@@ -130,8 +153,11 @@ export default function DashboardTab({
     <div className="space-y-6">
       {/* Leaderboard */}
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-        <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-gray-900">Leaderboard</h2>
+        <div className="px-6 py-4 border-b border-gray-100 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-4">
+            <h2 className="text-lg font-semibold text-gray-900">Leaderboard</h2>
+            <PeriodSelector selected={selectedPeriod} onChange={setSelectedPeriod} />
+          </div>
           <div className="flex items-center gap-2">
             <button
               onClick={() => { setActiveTab("trades"); setShowAddTrade(true); }}
@@ -150,58 +176,78 @@ export default function DashboardTab({
           </div>
         </div>
         <div className="divide-y divide-gray-100">
-          {leaderboard.map((player, index) => (
-            <div
-              key={player.id}
-              className="px-6 py-4 flex items-center gap-4"
-            >
+          {leaderboard.map((player, index) => {
+            const periodReturn = selectedPeriod !== "ALL"
+              ? getPeriodReturn(player.id, selectedPeriod, trades, currentPrices, priceHistory, contestStartDate)
+              : null;
+
+            return (
               <div
-                className={`w-8 h-8 rounded-full flex items-center justify-center text-white font-bold ${
-                  index === 0
-                    ? "bg-yellow-500"
-                    : index === 1
-                      ? "bg-gray-400"
-                      : index === 2
-                        ? "bg-amber-600"
-                        : "bg-gray-300"
-                }`}
+                key={player.id}
+                className="px-6 py-4 flex items-center gap-4"
               >
-                {index + 1}
-              </div>
-              <div className="flex-1">
-                <div className="flex items-center gap-2">
-                  <span
-                    className="w-3 h-3 rounded-full"
-                    style={{ backgroundColor: player.color }}
-                  />
-                  <span className="font-medium text-gray-900">
-                    {player.name}
-                  </span>
-                </div>
-                <p className="text-sm text-gray-500 mt-0.5">
-                  {player.positions.length} positions &bull;{" "}
-                  {player.totalTrades} trades
-                </p>
-              </div>
-              <div className="text-right">
-                <p className="font-semibold text-gray-900">
-                  {formatCurrency(player.totalValue)}
-                </p>
-                <p
-                  className={`text-sm font-medium ${player.returnPct >= 0 ? "text-green-600" : "text-red-600"}`}
+                <div
+                  className={`w-8 h-8 rounded-full flex items-center justify-center text-white font-bold ${
+                    index === 0
+                      ? "bg-yellow-500"
+                      : index === 1
+                        ? "bg-gray-400"
+                        : index === 2
+                          ? "bg-amber-600"
+                          : "bg-gray-300"
+                  }`}
                 >
-                  {formatPercent(player.returnPct)}
-                </p>
+                  {index + 1}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className="w-3 h-3 rounded-full flex-shrink-0"
+                      style={{ backgroundColor: player.color }}
+                    />
+                    <span className="font-medium text-gray-900">
+                      {player.name}
+                    </span>
+                  </div>
+                  <p className="text-sm text-gray-500 mt-0.5">
+                    {player.positions.length} positions &bull;{" "}
+                    {player.totalTrades} trades
+                  </p>
+                </div>
+                <div className="text-right flex-shrink-0">
+                  <p className="font-semibold text-gray-900">
+                    {formatCurrency(player.totalValue)}
+                  </p>
+                  <div className="flex items-center gap-1.5 justify-end">
+                    <span
+                      className={`text-sm font-medium ${player.returnPct >= 0 ? "text-green-600" : "text-red-600"}`}
+                    >
+                      {formatPercent(player.returnPct)}
+                    </span>
+                    {periodReturn && (
+                      <span
+                        className={`text-xs px-1.5 py-0.5 rounded ${
+                          periodReturn.returnDollar >= 0
+                            ? "bg-green-50 text-green-700"
+                            : "bg-red-50 text-red-700"
+                        }`}
+                      >
+                        {periodReturn.returnDollar >= 0 ? "+" : ""}
+                        {formatCurrency(periodReturn.returnDollar).replace("$", "$")}
+                      </span>
+                    )}
+                  </div>
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 
       {/* Update Current Prices */}
       {allOpenTickers.length > 0 && (
         <div className="bg-white rounded-xl border border-gray-200 p-6">
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
             <div>
               <h2 className="text-lg font-semibold text-gray-900">
                 Update Current Prices
@@ -210,7 +256,7 @@ export default function DashboardTab({
                 Enter today&apos;s prices to calculate accurate returns
               </p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               {refreshStatus && (
                 <span
                   className={`text-sm ${refreshStatus.startsWith("Error") ? "text-red-600" : "text-green-600"}`}
@@ -248,6 +294,16 @@ export default function DashboardTab({
               >
                 Yahoo ↗
               </button>
+              {!hasBenchmark && (
+                <button
+                  onClick={loadBenchmark}
+                  disabled={loadingBenchmark}
+                  title="Load S&P 500 benchmark data for chart comparison (IBKR primary, Polygon fallback)"
+                  className="px-3 py-1.5 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  {loadingBenchmark ? "Loading..." : "Load S&P 500"}
+                </button>
+              )}
             </div>
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
@@ -282,7 +338,7 @@ export default function DashboardTab({
               <p className="text-xs mt-3">
                 {staleness.stale ? (
                   <span className="text-amber-600 font-medium">
-                    ⚠️ Prices last updated: {staleness.latestDate
+                    Prices last updated: {staleness.latestDate
                       ? `${new Date(staleness.latestDate + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })} (${staleness.daysOld} day${staleness.daysOld !== 1 ? "s" : ""} ago)`
                       : "unknown"
                     }
@@ -301,168 +357,26 @@ export default function DashboardTab({
       )}
 
       {/* Performance Chart */}
-      {chartData.length > 0 && (
-        <div className="bg-white rounded-xl border border-gray-200 p-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">
-            Performance Over Time
-          </h2>
-          <div className="h-80">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
-                <XAxis
-                  dataKey="date"
-                  tick={{ fontSize: 12, fill: "#6B7280" }}
-                  tickFormatter={(date: string) =>
-                    new Date(date).toLocaleDateString("en-US", {
-                      month: "short",
-                      day: "numeric",
-                    })
-                  }
-                />
-                <YAxis
-                  tick={{ fontSize: 12, fill: "#6B7280" }}
-                  tickFormatter={(value: number) => `${value}%`}
-                />
-                <Tooltip
-                  formatter={(value) => [`${value}%`, ""]}
-                  labelFormatter={(date) =>
-                    new Date(date).toLocaleDateString()
-                  }
-                />
-                <Legend />
-                {players.map((player) => (
-                  <Line
-                    key={player.id}
-                    type="monotone"
-                    dataKey={player.name}
-                    stroke={player.color}
-                    strokeWidth={2}
-                    dot={{
-                      fill: player.color,
-                      strokeWidth: 2,
-                      r: 4,
-                    }}
-                  />
-                ))}
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      )}
+      <PerformanceChart
+        chartData={chartData}
+        players={players}
+        selectedPeriod={selectedPeriod}
+        contestStartDate={contestStartDate}
+        hasBenchmark={hasBenchmark}
+      />
 
       {/* Player Details */}
       <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
         {leaderboard.map((player) => (
-          <div
+          <PlayerDetailCard
             key={player.id}
-            className="bg-white rounded-xl border border-gray-200 p-6"
-          >
-            <div className="flex items-center gap-2 mb-4">
-              <span
-                className="w-3 h-3 rounded-full"
-                style={{ backgroundColor: player.color }}
-              />
-              <h3 className="font-semibold text-gray-900">{player.name}</h3>
-            </div>
-
-            <div className="space-y-3">
-              <div className="flex justify-between">
-                <span className="text-gray-500">Total Value</span>
-                <span className="font-semibold">
-                  {formatCurrency(player.totalValue)}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-500">Cash</span>
-                <span className="font-medium">
-                  {formatCurrency(player.cashRemaining)}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-500">Positions</span>
-                <span className="font-medium">
-                  {formatCurrency(player.portfolioValue)}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-500">Realized P&L</span>
-                <span
-                  className={`font-medium ${player.realizedGains >= 0 ? "text-green-600" : "text-red-600"}`}
-                >
-                  {formatCurrency(player.realizedGains)}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-500">Win Rate</span>
-                <span className="font-medium">
-                  {player.winRate.toFixed(0)}%
-                </span>
-              </div>
-              {player.bestTrade && (
-                <div className="flex justify-between">
-                  <span className="text-gray-500">Best Trade</span>
-                  <span
-                    className={`font-medium ${player.bestTrade.gainPct >= 0 ? "text-green-600" : "text-red-600"}`}
-                  >
-                    {player.bestTrade.ticker} (
-                    {formatPercent(player.bestTrade.gainPct)})
-                  </span>
-                </div>
-              )}
-              {player.worstTrade && (
-                <div className="flex justify-between">
-                  <span className="text-gray-500">Worst Trade</span>
-                  <span
-                    className={`font-medium ${player.worstTrade.gainPct >= 0 ? "text-green-600" : "text-red-600"}`}
-                  >
-                    {player.worstTrade.ticker} (
-                    {formatPercent(player.worstTrade.gainPct)})
-                  </span>
-                </div>
-              )}
-            </div>
-
-            {player.positions.length > 0 && (
-              <div className="mt-4 pt-4 border-t border-gray-100">
-                <p className="text-sm font-medium text-gray-700 mb-2">
-                  Open Positions ({player.positions.length}/5)
-                </p>
-                <div className="space-y-2">
-                  {player.positions.map((pos) => {
-                    const price = getCurrentPrice(
-                      pos.ticker,
-                      currentPrices,
-                      trades
-                    );
-                    const currentValue = pos.shares * price;
-                    const gain = currentValue - pos.totalCost;
-                    const gainPct = pos.totalCost !== 0 ? (gain / pos.totalCost) * 100 : 0;
-                    return (
-                      <div key={pos.ticker} className="text-sm">
-                        <div className="flex justify-between">
-                          <span className="font-medium text-gray-900">
-                            {pos.ticker}
-                          </span>
-                          <span
-                            className={`font-medium ${gain >= 0 ? "text-green-600" : "text-red-600"}`}
-                          >
-                            {formatPercent(gainPct)}
-                          </span>
-                        </div>
-                        <div className="flex justify-between text-gray-500 text-xs">
-                          <span>
-                            {pos.shares} shares @ {formatCurrency(pos.avgCost)}
-                          </span>
-                          <span>Now: {formatCurrency(price)}</span>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-          </div>
+            player={player}
+            trades={trades}
+            currentPrices={currentPrices}
+            priceHistory={priceHistory}
+            contestStartDate={contestStartDate}
+            selectedPeriod={selectedPeriod}
+          />
         ))}
       </div>
     </div>

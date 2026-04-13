@@ -7,6 +7,7 @@ import {
   type TradeForm,
   COLORS,
   DEFAULT_POSITION_SIZE,
+  BENCHMARK_KEY,
   getLastSaleProceeds,
   getLeaderboard,
   getPerformanceChartData,
@@ -370,7 +371,8 @@ export default function StockContestTracker() {
   // --- Derived Data ---
 
   const leaderboard = useMemo(() => getLeaderboard(players, trades, currentPrices), [players, trades, currentPrices]);
-  const chartData = useMemo(() => getPerformanceChartData(players, trades, currentPrices, priceHistory, undefined, contestStartDate), [players, trades, currentPrices, priceHistory, contestStartDate]);
+  const benchmarkHistory = useMemo(() => priceHistory[BENCHMARK_KEY] || undefined, [priceHistory]);
+  const chartData = useMemo(() => getPerformanceChartData(players, trades, currentPrices, priceHistory, undefined, contestStartDate, benchmarkHistory), [players, trades, currentPrices, priceHistory, contestStartDate, benchmarkHistory]);
 
 
   // --- Render ---
@@ -477,6 +479,7 @@ export default function StockContestTracker() {
             setActiveTab={setActiveTab}
             setShowAddTrade={setShowAddTrade}
             polygonApiKey={polygonApiKey}
+            contestStartDate={contestStartDate}
           />
         )}
 
