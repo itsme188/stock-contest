@@ -35,6 +35,29 @@ export default function PerformanceChart({
 
   if (filteredData.length === 0) return null;
 
+  // For non-ALL periods, normalize so the first data point = 0%
+  // This shows the change *during the period* rather than absolute returns
+  const displayData = selectedPeriod === "ALL"
+    ? filteredData
+    : (() => {
+        const baseline = filteredData[0];
+        const keys = [
+          ...players.map((p) => p.name),
+          ...(hasBenchmark ? ["S&P 500"] : []),
+        ];
+        return filteredData.map((point) => {
+          const normalized: Record<string, string> = { date: point.date };
+          for (const key of keys) {
+            if (point[key] !== undefined && baseline[key] !== undefined) {
+              normalized[key] = (
+                parseFloat(point[key]) - parseFloat(baseline[key])
+              ).toFixed(2);
+            }
+          }
+          return normalized;
+        });
+      })();
+
   return (
     <div className="bg-white rounded-xl border border-gray-200 p-6">
       <h2 className="text-lg font-semibold text-gray-900 mb-4">
@@ -42,7 +65,7 @@ export default function PerformanceChart({
       </h2>
       <div className="h-80">
         <ResponsiveContainer width="100%" height="100%">
-          <LineChart data={filteredData}>
+          <LineChart data={displayData}>
             <CartesianGrid strokeDasharray="3 3" stroke="#F3F4F6" />
             <XAxis
               dataKey="date"
