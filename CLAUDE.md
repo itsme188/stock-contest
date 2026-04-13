@@ -30,7 +30,7 @@ npm run email:status    # Check if launchd job is loaded
 - **AI**: @anthropic-ai/sdk (Claude Sonnet for weekly email commentary)
 - **Prices**: Polygon.io API (free tier, 5 calls/min) + IBKR TWS fallback via @stoqey/ib
 - **Market Context**: Vital Knowledge email digests via IMAP (imapflow)
-- **Testing**: Vitest (252 tests)
+- **Testing**: Vitest (275 tests)
 
 ## Architecture
 
@@ -52,12 +52,13 @@ npm run email:status    # Check if launchd job is loaded
 - `POST /api/prices/update` — Refresh all open ticker prices via Polygon (batch, rate-limited, returns `priceDates`)
 - `POST /api/prices/ibkr` — Refresh all open ticker prices via IBKR TWS (fallback, requires TWS running)
 - `POST /api/prices/backfill` — Bulk historical daily prices via Polygon range API
+- `POST /api/prices/benchmark` — S&P 500 (SPY) historical prices (IBKR primary, Polygon fallback)
 - `POST /api/email/preview` — Generate email preview (AI commentary + rendered HTML, no send)
 - `POST /api/email/weekly` — Weekly email report with AI commentary (accepts optional pre-generated commentary)
 
 ### Key Files
 - `app/dashboard/StockContestTracker.tsx` — State shell (~410 lines), all state + handlers
-- `app/dashboard/components/` — DashboardTab, TradesTab, PlayersTab, SettingsTab
+- `app/dashboard/components/` — DashboardTab, TradesTab, PlayersTab, SettingsTab, PeriodSelector, PerformanceChart, PlayerDetailCard
 - `lib/contest.ts` — Pure business logic (types, FIFO, P&L, stats, validation, chart data)
 - `lib/email.ts` — Email report logic (report data, week deltas, AI prompt, HTML/plain text templates, SMTP send)
 - `lib/vital-knowledge.ts` — Vital Knowledge email fetcher (IMAP, Gmail, market context for AI prompt)
@@ -134,6 +135,8 @@ Originally a single-file React app (Jan 14, 2026), ported to this Next.js projec
 
 **Mar 27**: Fixed Vital Knowledge silent failure — `imapflow` wasn't in `serverExternalPackages`, so Turbopack couldn't bundle it and VK fetch returned "" silently. Full project audit found IBKR error code >= 2000 bug in `lib/prices.ts` and `app/api/prices/ibkr/route.ts` (warnings treated as fatal errors, causing backfill to reject valid data). Added division-by-zero guards on `gainPct` (3 locations), expanded `serverExternalPackages` to include `better-sqlite3`, `@stoqey/ib`, `nodemailer`. Added 90s timeout on `backfillPrices()` in email routes. Memoized leaderboard/chartData with `useMemo`. New tests for `lib/prices.ts` (7) and `lib/commentary.ts` (13). 252 tests.
 
+**Apr 13**: Professionalized dashboard with brokerage-style features. Added period selector (1D/1W/1M/YTD/All) controlling leaderboard returns and chart date range. S&P 500 benchmark line on performance chart via `POST /api/prices/benchmark` (IBKR primary, Polygon fallback, stored as `__BENCHMARK_SPY` in `priceHistory`). Enhanced player detail cards with stats grid (cash, unrealized/realized P&L, win rate with W-L record) and compact two-line position cards (market value, portfolio weight %, daily change, days held). Extracted DashboardTab into PeriodSelector, PerformanceChart, and PlayerDetailCard sub-components. Polished chart: lighter grid, 0% reference line, smaller dots, indigo dashed S&P line, rounded tooltip with weekday. New pure functions in `lib/contest.ts`: `getPeriodReturn`, `getPositionDailyChange`, `getPositionDaysHeld`, `getBenchmarkReturnAtDate`. 275 tests (23 new).
+
 Seed data: 3 players, 17 trades, prices through Jan 30 — load via Settings > Import from `data/stock-contest-2026-01-30.json`.
 
 ## Known Limitations
@@ -190,6 +193,10 @@ Seed data: 3 players, 17 trades, prices through Jan 30 — load via Settings > I
 - **Packages using Node.js native modules (`net`, `tls`, native addons) need `serverExternalPackages`.** Turbopack can't bundle them. If the import is inside a try/catch (like `fetchVitalKnowledge`), the bundling failure is silent — the function just returns a default value. Always declare `imapflow`, `better-sqlite3`, `@stoqey/ib`, `nodemailer` as external.
 - **Apply the same fix everywhere, not just the first place you find it.** The IBKR `code >= 2000` warning skip existed in `app/api/prices/route.ts` but was missing from `lib/prices.ts` and `app/api/prices/ibkr/route.ts`. Grep for the pattern across the whole project.
 - **Wrap long-running calls with timeouts in API routes.** `backfillPrices()` could hang if IBKR is slow and Polygon batches take 61s each. Use `Promise.race` with a timeout, catch and warn, proceed with available data.
+
+- **9-column tables don't fit in 1/3-width cards.** The position table was unreadable with values crammed together. Two-line compact cards (row 1: key metrics, row 2: details) work at any width. Group related data on the same line instead of giving each datum its own column.
+- **Use UTC for date arithmetic, not local time.** `new Date("2026-03-01T12:00:00")` still suffers from DST (Spring Forward makes one day 23 hours). Use `T00:00:00Z` + `Math.round` for reliable day-count calculations.
+- **Reused infrastructure stores data under the original key.** `backfillViaIBKR(["SPY"])` stores under `priceHistory["SPY"]`, not `priceHistory["__BENCHMARK_SPY"]`. When reusing generic functions with a special key convention, copy the data to the expected key after the call.
 
 ## Core Principles
 
