@@ -46,14 +46,32 @@ export interface WeeklyReportData {
 
 // ---------- Data Assembly ----------
 
+// Returns the UNIX millisecond timestamp for 4:00 PM America/New_York (NYSE
+// market close) on the given YYYY-MM-DD. The weekly email window closes at
+// market close, so trades executed after 4:00 PM ET on Friday roll into the
+// following week rather than getting double-counted across two emails.
+export function getMarketCloseTimestamp(dateStr: string): number {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  // 4:00 PM EDT = 20:00 UTC; 4:00 PM EST = 21:00 UTC. Guess EDT, then check.
+  const edtGuess = Date.UTC(y, m - 1, d, 20, 0, 0);
+  const tzName =
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      timeZoneName: "short",
+    })
+      .formatToParts(new Date(edtGuess))
+      .find((p) => p.type === "timeZoneName")?.value ?? "";
+  return tzName === "EDT" ? edtGuess : edtGuess + 3600 * 1000;
+}
+
 export function getWeeklyTrades(trades: Trade[], asOfDate?: string): Trade[] {
-  const now = asOfDate ? new Date(asOfDate) : new Date();
-  const oneWeekAgo = new Date(now);
-  oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
-  const cutoff = oneWeekAgo.toISOString().split("T")[0];
-  const end = now.toISOString().split("T")[0];
+  const reportDate = asOfDate || new Date().toISOString().split("T")[0];
+  const endTs = getMarketCloseTimestamp(reportDate);
+  const startTs = endTs - 7 * 24 * 60 * 60 * 1000;
+  // Half-open window (startTs, endTs]: a trade at the start cutoff belongs to
+  // the previous week's email, not this one.
   return trades
-    .filter((t) => t.date >= cutoff && t.date <= end)
+    .filter((t) => t.timestamp > startTs && t.timestamp <= endTs)
     .sort((a, b) => a.timestamp - b.timestamp);
 }
 
@@ -65,16 +83,17 @@ export function buildReportData(
   asOfDate?: string
 ): WeeklyReportData {
   const reportDate = asOfDate || new Date().toISOString().split("T")[0];
-  const now = new Date(reportDate);
-  const oneWeekAgo = new Date(now);
+  const endTs = getMarketCloseTimestamp(reportDate);
+  const startTs = endTs - 7 * 24 * 60 * 60 * 1000;
+  const oneWeekAgo = new Date(reportDate);
   oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
-  const cutoff = oneWeekAgo.toISOString().split("T")[0];
+  const cutoffDate = oneWeekAgo.toISOString().split("T")[0];
 
   const currentLeaderboard = getLeaderboard(players, trades, currentPrices);
 
-  // Compute previous week's rankings using trades before cutoff, valued at current prices
-  // (used only for rank change detection — rank is relative ordering, not dollar values)
-  const previousTrades = trades.filter((t) => t.date < cutoff);
+  // Previous week's rankings use trades executed at or before the start cutoff
+  // (last Friday 4:00 PM ET). Used only for rank-change detection.
+  const previousTrades = trades.filter((t) => t.timestamp <= startTs);
   const previousLeaderboard = getLeaderboard(players, previousTrades, currentPrices);
 
   const weekDeltas: PlayerWeekDelta[] = currentLeaderboard.map((current, currentRank) => {
@@ -82,8 +101,9 @@ export function buildReportData(
     const previousRank = previous
       ? previousLeaderboard.indexOf(previous)
       : currentRank;
-    // Use getPlayerValueAtDate for true historical portfolio value
-    const prevValue = getPlayerValueAtDate(current.id, cutoff, trades, priceHistory);
+    // Feed the timestamp-filtered trade set to getPlayerValueAtDate so its
+    // internal date filter can't silently re-add same-day-after-close trades.
+    const prevValue = getPlayerValueAtDate(current.id, cutoffDate, previousTrades, priceHistory);
     const weekChange = current.totalValue - prevValue;
     return {
       playerId: current.id,
@@ -140,6 +160,22 @@ export function buildCommentaryPrompt(data: WeeklyReportData, marketContext?: st
   oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
   const cutoffDate = oneWeekAgo.toISOString().split("T")[0];
 
+  // Per-player, per-position weekly % price change (used twice below).
+  const weeklyMovesByPlayer = leaderboard.map((p) => {
+    const moves = p.positions
+      .map((pos) => {
+        const curPrice = getCurrentPrice(pos.ticker, currentPrices, trades);
+        const weekAgoPrice = getPriceAtDate(pos.ticker, cutoffDate, priceHistory);
+        const pct =
+          weekAgoPrice && weekAgoPrice > 0
+            ? ((curPrice - weekAgoPrice) / weekAgoPrice) * 100
+            : null;
+        return pct !== null ? { ticker: pos.ticker, pct } : null;
+      })
+      .filter((x): x is { ticker: string; pct: number } => x !== null);
+    return { player: p, moves };
+  });
+
   const standingsSummary = leaderboard
     .map((p, i) => {
       const delta = weekDeltas.find((d) => d.playerId === p.id);
@@ -172,13 +208,89 @@ export function buildCommentaryPrompt(data: WeeklyReportData, marketContext?: st
     })
     .join("\n");
 
+  // Pre-ranked biggest weekly movers per player so the AI doesn't have to
+  // sort the position list itself (it was getting this wrong).
+  const fmtMove = (m: { ticker: string; pct: number }) =>
+    `${m.ticker} ${m.pct >= 0 ? "+" : ""}${formatPercent(m.pct)}`;
+  const weeklyMoversSummary = weeklyMovesByPlayer
+    .map(({ player, moves }) => {
+      if (moves.length === 0) return `${player.name}: no weekly price data available`;
+      const sorted = [...moves].sort((a, b) => b.pct - a.pct);
+      const best = sorted[0];
+      const worst = sorted[sorted.length - 1];
+      const parts = [`biggest gainer ${fmtMove(best)}`];
+      if (sorted.length > 1 && worst.ticker !== best.ticker) {
+        parts.push(`biggest laggard ${fmtMove(worst)}`);
+      }
+      return `${player.name}: ${parts.join(", ")}`;
+    })
+    .join("\n");
+
+  // Enrich weekly trades with partial/full-close status and realized P&L so
+  // the AI doesn't mistake a trim for a full exit (Eli's WLTH sell on Apr 17
+  // was a partial, but the prompt didn't say so).
+  const tradeAnnotations = new Map<string, string>();
+  for (const player of players) {
+    const pTrades = trades
+      .filter((t) => t.playerId === player.id)
+      .sort((a, b) => a.timestamp - b.timestamp);
+    const lots: Record<string, Array<{ shares: number; price: number }>> = {};
+    const totalShares: Record<string, number> = {};
+    const weeklyIds = new Set(weeklyTrades.map((w) => w.id));
+    for (const t of pTrades) {
+      lots[t.ticker] ??= [];
+      totalShares[t.ticker] ??= 0;
+      if (t.type === "buy") {
+        const hadAny = totalShares[t.ticker] > 0;
+        lots[t.ticker].push({ shares: t.shares, price: t.price });
+        totalShares[t.ticker] += t.shares;
+        if (weeklyIds.has(t.id)) {
+          tradeAnnotations.set(
+            t.id,
+            hadAny
+              ? `adds to existing position (now ${totalShares[t.ticker]} shares)`
+              : "new position"
+          );
+        }
+      } else {
+        const sharesBefore = totalShares[t.ticker];
+        let toSell = t.shares;
+        let costBasis = 0;
+        while (toSell > 0 && lots[t.ticker].length > 0) {
+          const lot = lots[t.ticker][0];
+          const use = Math.min(toSell, lot.shares);
+          costBasis += use * lot.price;
+          toSell -= use;
+          lot.shares -= use;
+          if (lot.shares === 0) lots[t.ticker].shift();
+        }
+        totalShares[t.ticker] -= t.shares;
+        const realized = t.shares * t.price - costBasis;
+        if (weeklyIds.has(t.id)) {
+          const remaining = totalShares[t.ticker];
+          // Show the before → after transition so the AI can't confuse the
+          // sell count with the remaining-shares count (e.g., sold 1194 of a
+          // 2389-share position, leaving 1195).
+          const closeType =
+            remaining <= 0
+              ? "FULL CLOSE (position exited)"
+              : `PARTIAL TRIM (position: ${sharesBefore} shares -> ${remaining} remaining)`;
+          const realizedStr = `realized ${realized >= 0 ? "+" : ""}${formatCurrency(realized)}`;
+          tradeAnnotations.set(t.id, `${closeType}, ${realizedStr}`);
+        }
+      }
+    }
+  }
+
   const recentTradesSummary =
     weeklyTrades.length > 0
       ? weeklyTrades
           .map((t) => {
             const player = players.find((p) => p.id === t.playerId);
             const total = t.shares * t.price;
-            return `${t.date}: ${player?.name} ${t.type.toUpperCase()} ${t.shares} ${t.ticker} @ ${formatCurrency(t.price)} (${formatCurrency(total)} total)`;
+            const annotation = tradeAnnotations.get(t.id);
+            const annStr = annotation ? ` — ${annotation}` : "";
+            return `${t.date}: ${player?.name} ${t.type.toUpperCase()} ${t.shares} ${t.ticker} @ ${formatCurrency(t.price)} (${formatCurrency(total)} total)${annStr}`;
           })
           .join("\n")
       : "No trades this week.";
@@ -207,14 +319,22 @@ STRICT RULES:
 - Use specific numbers from the data (dollar amounts, percentages, share counts)
 - Position size = total dollars deployed, NOT per-share price. A 100-share position at $50/share ($5,000 deployed) is smaller than a 10-share position at $1,000/share ($10,000 deployed). The "deployed" amounts in the data are authoritative.
 - CRITICAL: "% total" is the gain since purchase. "% this week" is the actual price movement over the past 7 days. When discussing weekly performance, ONLY use the "this week" numbers. Never present total return as a weekly move.
+- SCOPE: "This week" is the window from last Friday's market close (4:00 PM ET) through this Friday's market close. Only reference trades in the "Trades this week" list below. Do NOT invent or recall trades from prior weeks — any ticker that appears only in a Positions line (not in the Trades list) is a pre-existing holding, not a recent trade.
+- BIGGEST WEEKLY MOVER: when naming a player's best- or worst-performing position of the week, use the pre-ranked values in the "Biggest weekly moves" section. Do not eyeball the standings list.
+- PARTIAL vs FULL CLOSE: respect the annotation on each sell. "partial trim, N shares still held" means the position is NOT closed. "full close" means exited. Never describe a partial as a full exit.
+- ACTIVITY COVERAGE: every trade in "Trades this week" must be addressed — either by name or via a deliberate grouping (e.g., "Yitzi made two trims and two adds on the 10th"). Do not silently skip any.
 - Do NOT use any of these words/phrases: ${BANNED_WORDS.map((w) => `"${w}"`).join(", ")}
 - Never use the "it's not X, it's Y" rhetorical construction
 - No flattery, no superlatives, no glazing -- just state what happened
-- NEVER claim a ticker is held by all players or "across all portfolios" unless it literally appears in every player's Positions list above. Each player's holdings are listed individually — check before generalizing.
+- NEVER claim a ticker is held by all players or use phrases like "across all portfolios" / "across all three" / "every player" unless the ticker literally appears in all three players' Positions lists above. If only two players hold it, name them explicitly ("both Daddy and Eli hold HYDTF"). If only one holds it, attribute to that player only.
+- POSITION COUNTS: the standings list shows holdings as of the report date (AFTER all trades this week). When describing a trim, take the "remaining" count from the trade annotation (which shows "position: N shares -> M remaining"). Do NOT subtract sold shares from the standings number — the standings already reflect the post-trade total.
 - Keep it under 200 words
 
 Current standings as of ${reportDate}:
 ${standingsSummary}
+
+Biggest weekly moves per player (pre-ranked — use these verbatim):
+${weeklyMoversSummary}
 
 Trades this week:
 ${recentTradesSummary}${marketContext ? `

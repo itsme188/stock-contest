@@ -63,6 +63,65 @@ describe("getWeeklyTrades", () => {
       );
     }
   });
+
+  // Prior bug: a trade executed on Friday before 4:00 PM ET appeared in both
+  // that Friday's email and the next Friday's email. The window is now
+  // anchored to Friday market close (4:00 PM America/New_York) and half-open
+  // on the start side, so a Friday pre-close trade belongs to that Friday's
+  // email only.
+  it("excludes a trade executed before 4:00 PM ET on the prior Friday", () => {
+    // Apr 10, 2026 at 15:00 ET = 19:00 UTC (EDT, UTC-4). One hour before
+    // market close -> should belong to the Apr 10 email, not the Apr 17 one.
+    const tsBeforeClose = Date.UTC(2026, 3, 10, 19, 0, 0);
+    const trade: Trade = {
+      id: "bound-before",
+      playerId: "p1",
+      ticker: "NVDA",
+      type: "buy",
+      shares: 1,
+      price: 100,
+      date: "2026-04-10",
+      timestamp: tsBeforeClose,
+    };
+    const weekly = getWeeklyTrades([trade], "2026-04-17");
+    expect(weekly).toHaveLength(0);
+  });
+
+  it("includes a trade executed after 4:00 PM ET on the prior Friday", () => {
+    // Apr 10, 2026 at 17:00 ET = 21:00 UTC. After market close -> belongs to
+    // the Apr 17 email because it missed the Apr 10 cutoff.
+    const tsAfterClose = Date.UTC(2026, 3, 10, 21, 0, 0);
+    const trade: Trade = {
+      id: "bound-after",
+      playerId: "p1",
+      ticker: "NVDA",
+      type: "buy",
+      shares: 1,
+      price: 100,
+      date: "2026-04-10",
+      timestamp: tsAfterClose,
+    };
+    const weekly = getWeeklyTrades([trade], "2026-04-17");
+    expect(weekly).toHaveLength(1);
+  });
+
+  it("excludes a trade executed after 4:00 PM ET on the report Friday", () => {
+    // Apr 17, 2026 at 16:30 ET = 20:30 UTC. After close on report day ->
+    // rolls into the next week's email.
+    const tsAfterReportClose = Date.UTC(2026, 3, 17, 20, 30, 0);
+    const trade: Trade = {
+      id: "bound-report",
+      playerId: "p1",
+      ticker: "NVDA",
+      type: "buy",
+      shares: 1,
+      price: 100,
+      date: "2026-04-17",
+      timestamp: tsAfterReportClose,
+    };
+    const weekly = getWeeklyTrades([trade], "2026-04-17");
+    expect(weekly).toHaveLength(0);
+  });
 });
 
 describe("buildReportData", () => {
