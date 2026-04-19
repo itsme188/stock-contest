@@ -348,7 +348,42 @@ export function buildEmailHtml(
               .join("")
           : `<tr><td colspan="6" style="padding: 12px; text-align: center; color: #9CA3AF; font-size: 13px;">No open positions</td></tr>`;
 
+      const closedTradesHtml = stats.closedTrades.length > 0
+        ? `
+        <h3 style="margin: 20px 0 8px 0; font-size: 13px; font-weight: 600; color: #374151; text-transform: uppercase; letter-spacing: 0.04em;">Closed Trades to Date</h3>
+        <table style="width: 100%; border-collapse: collapse;">
+          <thead>
+            <tr style="background: #F9FAFB;">
+              <th style="padding: 6px 10px; text-align: left; font-size: 11px; font-weight: 600; color: #6B7280; text-transform: uppercase;">Ticker</th>
+              <th style="padding: 6px 10px; text-align: left; font-size: 11px; font-weight: 600; color: #6B7280; text-transform: uppercase;">Shares</th>
+              <th style="padding: 6px 10px; text-align: left; font-size: 11px; font-weight: 600; color: #6B7280; text-transform: uppercase;">Avg Buy</th>
+              <th style="padding: 6px 10px; text-align: left; font-size: 11px; font-weight: 600; color: #6B7280; text-transform: uppercase;">Avg Sell</th>
+              <th style="padding: 6px 10px; text-align: right; font-size: 11px; font-weight: 600; color: #6B7280; text-transform: uppercase;">Gain/Loss</th>
+              <th style="padding: 6px 10px; text-align: right; font-size: 11px; font-weight: 600; color: #6B7280; text-transform: uppercase;">%</th>
+            </tr>
+          </thead>
+          <tbody>${stats.closedTrades
+            .map((ct) => {
+              const avgBuy = ct.shares !== 0 ? ct.costBasis / ct.shares : 0;
+              const avgSell = ct.shares !== 0 ? ct.proceeds / ct.shares : 0;
+              const color = ct.gain >= 0 ? "#059669" : "#DC2626";
+              return `<tr style="border-bottom: 1px solid #F3F4F6;">
+                  <td style="padding: 6px 10px; font-size: 13px; font-weight: 600; color: #111827;">${ct.ticker}</td>
+                  <td style="padding: 6px 10px; font-size: 13px; color: #4B5563;">${ct.shares}</td>
+                  <td style="padding: 6px 10px; font-size: 13px; color: #4B5563;">${formatCurrency(avgBuy)}</td>
+                  <td style="padding: 6px 10px; font-size: 13px; color: #4B5563;">${formatCurrency(avgSell)}</td>
+                  <td style="padding: 6px 10px; font-size: 13px; font-weight: 600; color: ${color}; text-align: right;">${ct.gain >= 0 ? "+" : ""}${formatCurrency(ct.gain)}</td>
+                  <td style="padding: 6px 10px; font-size: 13px; font-weight: 600; color: ${color}; text-align: right;">${formatPercent(ct.gainPct)}</td>
+                </tr>`;
+            })
+            .join("")}</tbody>
+        </table>`
+        : "";
+
       const returnColor = stats.returnPct >= 0 ? "#059669" : "#DC2626";
+      const realizedLabel = stats.closedTrades.length > 0
+        ? `Net Realized P&amp;L (${stats.winningTrades} win${stats.winningTrades === 1 ? "" : "s"} / ${stats.losingTrades} loss${stats.losingTrades === 1 ? "" : "es"})`
+        : "Realized P&amp;L";
 
       return `<div style="background: white; border: 1px solid #E5E7EB; border-radius: 12px; padding: 20px; margin-bottom: 16px;">
         <div style="display: flex; align-items: center; margin-bottom: 12px;">
@@ -356,10 +391,10 @@ export function buildEmailHtml(
           <span style="font-weight: 700; font-size: 16px; color: #111827;">${p.name}</span>
           <span style="margin-left: 12px; font-weight: 600; color: ${returnColor}; font-size: 14px;">${formatPercent(stats.returnPct)}</span>
         </div>
-        <div style="display: flex; gap: 24px; margin-bottom: 12px; font-size: 13px; color: #4B5563;">
+        <div style="display: flex; gap: 24px; margin-bottom: 12px; font-size: 13px; color: #4B5563; flex-wrap: wrap;">
           <span>Cash: <strong>${formatCurrency(stats.cashRemaining)}</strong></span>
           <span>Portfolio: <strong>${formatCurrency(stats.portfolioValue)}</strong></span>
-          <span>Realized P&L: <strong style="color: ${stats.realizedGains >= 0 ? "#059669" : "#DC2626"};">${formatCurrency(stats.realizedGains)}</strong></span>
+          <span>${realizedLabel}: <strong style="color: ${stats.realizedGains >= 0 ? "#059669" : "#DC2626"};">${formatCurrency(stats.realizedGains)}</strong></span>
         </div>
         <table style="width: 100%; border-collapse: collapse;">
           <thead>
@@ -373,7 +408,7 @@ export function buildEmailHtml(
             </tr>
           </thead>
           <tbody>${positionsHtml}</tbody>
-        </table>
+        </table>${closedTradesHtml}
       </div>`;
     })
     .join("");
@@ -503,8 +538,11 @@ export function buildPlainText(
 
   leaderboard.forEach((p) => {
     const stats = getPlayerStats(p.id, trades, currentPrices);
+    const realizedLabel = stats.closedTrades.length > 0
+      ? `Net Realized P&L (${stats.winningTrades} win${stats.winningTrades === 1 ? "" : "s"} / ${stats.losingTrades} loss${stats.losingTrades === 1 ? "" : "es"})`
+      : "Realized P&L";
     lines.push(`\n${p.name} (${formatPercent(stats.returnPct)})`);
-    lines.push(`  Cash: ${formatCurrency(stats.cashRemaining)} | Portfolio: ${formatCurrency(stats.portfolioValue)} | Realized P&L: ${formatCurrency(stats.realizedGains)}`);
+    lines.push(`  Cash: ${formatCurrency(stats.cashRemaining)} | Portfolio: ${formatCurrency(stats.portfolioValue)} | ${realizedLabel}: ${formatCurrency(stats.realizedGains)}`);
     if (stats.positions.length > 0) {
       stats.positions.forEach((pos) => {
         const price = getCurrentPrice(pos.ticker, currentPrices, trades);
@@ -516,6 +554,16 @@ export function buildPlainText(
       });
     } else {
       lines.push("  No open positions");
+    }
+    if (stats.closedTrades.length > 0) {
+      lines.push("  Closed trades to date:");
+      stats.closedTrades.forEach((ct) => {
+        const avgBuy = ct.shares !== 0 ? ct.costBasis / ct.shares : 0;
+        const avgSell = ct.shares !== 0 ? ct.proceeds / ct.shares : 0;
+        lines.push(
+          `    ${ct.ticker}: ${ct.shares} shares, ${formatCurrency(avgBuy)} buy -> ${formatCurrency(avgSell)} sell (${ct.gain >= 0 ? "+" : ""}${formatCurrency(ct.gain)}, ${formatPercent(ct.gainPct)})`
+        );
+      });
     }
   });
 
