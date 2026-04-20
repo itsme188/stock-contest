@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getContestData } from "@/lib/db";
+import { getContestData, saveContestData } from "@/lib/db";
 import { type Player, type Trade } from "@/lib/contest";
 import {
   buildReportData,
@@ -11,7 +11,29 @@ import { backfillPrices } from "@/lib/prices";
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json().catch(() => ({}));
+    const body = (await request.json().catch(() => ({}))) as {
+      to?: string;
+      commentary?: string;
+      force?: boolean;
+    };
+
+    const testTo = body.to;
+    const today = new Date().toISOString().split("T")[0];
+
+    // Idempotency: refuse a second real send on the same day unless explicitly
+    // forced. Test sends (body.to) bypass the check so dry-runs can be retried.
+    if (!testTo && !body.force) {
+      const { lastWeeklyEmailSentDate } = getContestData();
+      if (lastWeeklyEmailSentDate === today) {
+        return NextResponse.json({
+          ok: true,
+          skipped: true,
+          reason: "already_sent_today",
+          reportDate: today,
+          lastWeeklyEmailSentDate,
+        });
+      }
+    }
 
     // Backfill price history so "this week" calculations are accurate (90s timeout)
     try {
@@ -48,8 +70,7 @@ export async function POST(request: Request) {
         { status: 400 }
       );
     }
-    // Optional "to" override for test sends
-    const testTo = (body as { to?: string }).to;
+    // Optional "to" override for test sends (testTo declared at top)
     const effectiveEmails = testTo
       ? { _test: testTo }
       : playerEmails;
@@ -80,6 +101,12 @@ export async function POST(request: Request) {
       reportData,
       commentary
     );
+
+    // Only record real sends (not dry-runs to a test address) so the next
+    // scheduled or manual call on the same day is treated as a duplicate.
+    if (!testTo) {
+      saveContestData({ lastWeeklyEmailSentDate: reportData.reportDate });
+    }
 
     return NextResponse.json({
       ok: true,

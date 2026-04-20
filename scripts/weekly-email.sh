@@ -162,7 +162,9 @@ EMAIL_RESPONSE=$(curl -sf --max-time "$EMAIL_TIMEOUT" \
 
 log "Email response: ${EMAIL_RESPONSE}"
 
-if echo "$EMAIL_RESPONSE" | grep -q '"ok":true'; then
+if echo "$EMAIL_RESPONSE" | grep -q '"skipped":true'; then
+  log "=== Skipped: email already sent today (manual send detected) ==="
+elif echo "$EMAIL_RESPONSE" | grep -q '"ok":true'; then
   log "=== Weekly email sent successfully ==="
 else
   notify_failure "Email returned unexpected response"

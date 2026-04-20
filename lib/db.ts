@@ -15,6 +15,9 @@ export interface ContestData {
   anthropicApiKey: string;
   aiModel: string;
   playerEmails: Record<string, string>;
+  // YYYY-MM-DD of the last successful weekly email send. Used by the send
+  // endpoint to refuse duplicate sends on the same day (manual + cron collision).
+  lastWeeklyEmailSentDate: string;
 }
 
 const DB_PATH = path.join(process.cwd(), "data", "contest.db");
@@ -263,6 +266,7 @@ const DEFAULTS: Omit<ContestData, "trades"> & { trades: Trade[] } = {
   anthropicApiKey: "",
   aiModel: "claude-sonnet-4-5-20250929",
   playerEmails: {},
+  lastWeeklyEmailSentDate: "",
 };
 
 export function getContestData(): ContestData {
@@ -306,6 +310,8 @@ export function getContestData(): ContestData {
       (data.aiModel as string) ?? DEFAULTS.aiModel,
     playerEmails:
       (data.playerEmails as Record<string, string>) ?? DEFAULTS.playerEmails,
+    lastWeeklyEmailSentDate:
+      (data.lastWeeklyEmailSentDate as string) ?? DEFAULTS.lastWeeklyEmailSentDate,
   };
 }
 
