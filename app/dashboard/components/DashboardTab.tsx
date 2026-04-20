@@ -76,6 +76,25 @@ export default function DashboardTab({
     setLastRefreshed(new Date().toLocaleString());
   };
 
+  // Fetch S&P 500 (SPY) daily bars and merge into priceHistory[BENCHMARK_KEY].
+  // Returns a user-facing status string (empty string on silent success).
+  const fetchBenchmark = async (): Promise<string> => {
+    try {
+      const res = await fetch("/api/prices/benchmark", { method: "POST" });
+      const data = await res.json();
+      if (res.ok) {
+        setPriceHistory((prev) => ({
+          ...prev,
+          [BENCHMARK_KEY]: { ...(prev[BENCHMARK_KEY] || {}), ...data.prices },
+        }));
+        return `Loaded ${data.daysLoaded} days of S&P 500 data`;
+      }
+      return `S&P 500 refresh error: ${data.error}`;
+    } catch (err) {
+      return `S&P 500 refresh error: ${err instanceof Error ? err.message : err}`;
+    }
+  };
+
   const refreshPrices = async (source: "polygon" | "ibkr") => {
     setRefreshing(true);
     setRefreshSource(source);
@@ -94,6 +113,12 @@ export default function DashboardTab({
       const data = await res.json();
       if (res.ok) {
         applyPriceUpdate(data, source === "ibkr" ? "IBKR TWS" : "Polygon");
+        // Keep the S&P 500 comparison line in sync with held-ticker prices.
+        // Runs sequentially because the IBKR path shares client ID 2.
+        const benchmarkStatus = await fetchBenchmark();
+        if (benchmarkStatus.startsWith("S&P 500 refresh error")) {
+          setRefreshStatus((prev) => `${prev} — ${benchmarkStatus}`);
+        }
       } else {
         setRefreshStatus(`Error: ${data.error}`);
       }
@@ -108,23 +133,9 @@ export default function DashboardTab({
   const loadBenchmark = async () => {
     setLoadingBenchmark(true);
     setRefreshStatus("Loading S&P 500 benchmark data...");
-    try {
-      const res = await fetch("/api/prices/benchmark", { method: "POST" });
-      const data = await res.json();
-      if (res.ok) {
-        setPriceHistory((prev) => ({
-          ...prev,
-          [BENCHMARK_KEY]: { ...(prev[BENCHMARK_KEY] || {}), ...data.prices },
-        }));
-        setRefreshStatus(`Loaded ${data.daysLoaded} days of S&P 500 data`);
-      } else {
-        setRefreshStatus(`Error: ${data.error}`);
-      }
-    } catch (err) {
-      setRefreshStatus(`Error: ${err instanceof Error ? err.message : err}`);
-    } finally {
-      setLoadingBenchmark(false);
-    }
+    const status = await fetchBenchmark();
+    setRefreshStatus(status);
+    setLoadingBenchmark(false);
   };
 
   if (players.length === 0) {
