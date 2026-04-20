@@ -88,8 +88,26 @@ export default function PlayerDetailCard({
           color={player.realizedGains >= 0 ? "green" : "red"}
         />
         <StatItem
+          label="Realized Losses"
+          value={formatCurrency(player.realizedLosses)}
+          color={player.realizedLosses < 0 ? "red" : undefined}
+        />
+        <StatItem
           label="Win Rate"
           value={`${player.winRate.toFixed(0)}% (${player.winningTrades}W-${player.losingTrades}L)`}
+        />
+        <StatItem
+          label="Sharpe Ratio"
+          value={
+            player.sharpeRatio != null ? player.sharpeRatio.toFixed(2) : "—"
+          }
+          color={
+            player.sharpeRatio != null
+              ? player.sharpeRatio >= 0
+                ? "green"
+                : "red"
+              : undefined
+          }
         />
       </div>
 

@@ -18,6 +18,7 @@ import {
   getPeriodStartDate,
   getPositionDailyChange,
   getPositionDaysHeld,
+  getPlayerSharpeRatio,
   getBenchmarkReturnAtDate,
   formatCurrency,
   formatPercent,
@@ -1173,6 +1174,104 @@ describe("getPositionDailyChange", () => {
     const result = getPositionDailyChange("AAPL", 120, priceHistory);
     expect(result!.changeDollar).toBe(-5);
     expect(result!.changePct).toBeCloseTo(-4, 0);
+  });
+
+  it("uses previous-day close, not today's entry, when history already contains today", () => {
+    // Regression: price refresh routes store currentPrice under today's date,
+    // so reading the last entry always produced delta=0.
+    const today = "2026-04-20";
+    const priceHistory = {
+      AAPL: { "2026-04-17": 100, "2026-04-20": 105 },
+    };
+    const result = getPositionDailyChange("AAPL", 105, priceHistory, today);
+    expect(result).not.toBeNull();
+    expect(result!.changeDollar).toBeCloseTo(5, 2);
+    expect(result!.changePct).toBeCloseTo(5, 2);
+  });
+
+  it("returns null when history contains only today's entry", () => {
+    const today = "2026-04-20";
+    const priceHistory = { AAPL: { "2026-04-20": 105 } };
+    expect(getPositionDailyChange("AAPL", 105, priceHistory, today)).toBeNull();
+  });
+});
+
+// --- realizedLosses + sharpeRatio in PlayerStats ---
+
+describe("realizedLosses in getPlayerStats", () => {
+  it("sums gains across losing closed trades (negative number)", () => {
+    const trades: Trade[] = [
+      makeTrade({ playerId: PLAYER_A, type: "buy", ticker: "AAPL", shares: 10, price: 100, date: "2026-01-05" }),
+      makeTrade({ playerId: PLAYER_A, type: "sell", ticker: "AAPL", shares: 10, price: 90, date: "2026-01-10" }),
+      makeTrade({ playerId: PLAYER_A, type: "buy", ticker: "GOOG", shares: 5, price: 200, date: "2026-01-15" }),
+      makeTrade({ playerId: PLAYER_A, type: "sell", ticker: "GOOG", shares: 5, price: 180, date: "2026-01-20" }),
+      makeTrade({ playerId: PLAYER_A, type: "buy", ticker: "MSFT", shares: 8, price: 50, date: "2026-01-25" }),
+      makeTrade({ playerId: PLAYER_A, type: "sell", ticker: "MSFT", shares: 8, price: 60, date: "2026-01-30" }),
+    ];
+    const stats = getPlayerStats(PLAYER_A, trades, {});
+    // AAPL: -100, GOOG: -100 → -200; MSFT is a win so excluded.
+    expect(stats.realizedLosses).toBeCloseTo(-200, 2);
+    expect(stats.realizedGains).toBeCloseTo(-120, 2); // AAPL -100 + GOOG -100 + MSFT +80
+  });
+
+  it("is 0 when there are no losing trades", () => {
+    const trades: Trade[] = [
+      makeTrade({ playerId: PLAYER_A, type: "buy", ticker: "AAPL", shares: 10, price: 100, date: "2026-01-05" }),
+      makeTrade({ playerId: PLAYER_A, type: "sell", ticker: "AAPL", shares: 10, price: 110, date: "2026-01-10" }),
+    ];
+    const stats = getPlayerStats(PLAYER_A, trades, {});
+    expect(stats.realizedLosses).toBe(0);
+  });
+});
+
+describe("getPlayerSharpeRatio", () => {
+  it("returns null when fewer than 2 daily returns are available", () => {
+    expect(getPlayerSharpeRatio(PLAYER_A, [], {}, "2026-01-01")).toBeNull();
+  });
+
+  it("returns a finite number for a player with variable daily portfolio values", () => {
+    const trades: Trade[] = [
+      makeTrade({ playerId: PLAYER_A, type: "buy", ticker: "AAPL", shares: 100, price: 100, date: "2026-01-05" }),
+    ];
+    const priceHistory = {
+      AAPL: {
+        "2026-01-05": 100,
+        "2026-01-06": 102,
+        "2026-01-07": 101,
+        "2026-01-08": 104,
+        "2026-01-09": 103,
+      },
+    };
+    const sharpe = getPlayerSharpeRatio(
+      PLAYER_A,
+      trades,
+      priceHistory,
+      "2026-01-05",
+      { today: "2026-01-09" }
+    );
+    expect(sharpe).not.toBeNull();
+    expect(Number.isFinite(sharpe!)).toBe(true);
+  });
+
+  it("returns null when portfolio value is flat (stdev = 0)", () => {
+    const trades: Trade[] = [
+      makeTrade({ playerId: PLAYER_A, type: "buy", ticker: "AAPL", shares: 100, price: 100, date: "2026-01-05" }),
+    ];
+    const priceHistory = {
+      AAPL: {
+        "2026-01-05": 100,
+        "2026-01-06": 100,
+        "2026-01-07": 100,
+      },
+    };
+    const sharpe = getPlayerSharpeRatio(
+      PLAYER_A,
+      trades,
+      priceHistory,
+      "2026-01-05",
+      { today: "2026-01-07" }
+    );
+    expect(sharpe).toBeNull();
   });
 });
 
