@@ -136,6 +136,17 @@ if [ -n "$BACKFILL_RESPONSE" ]; then
   log "Backfill response: ${BACKFILL_RESPONSE}"
 fi
 
+# Refresh S&P 500 benchmark (SPY isn't in anyone's portfolio, so backfill skips it)
+log "Refreshing S&P 500 benchmark..."
+BENCHMARK_RESPONSE=$(curl -sf --max-time "$PRICE_TIMEOUT" \
+  -X POST "${BASE_URL}/api/prices/benchmark" \
+  -H "Content-Type: application/json" 2>&1) || {
+  log "WARNING: Benchmark refresh failed (continuing anyway): ${BENCHMARK_RESPONSE:-<empty>}"
+}
+if [ -n "$BENCHMARK_RESPONSE" ]; then
+  log "Benchmark response: ${BENCHMARK_RESPONSE}"
+fi
+
 # Brief delay to let SQLite settle
 log "Waiting ${SLEEP_AFTER_PRICES}s before sending email..."
 sleep "$SLEEP_AFTER_PRICES"
@@ -151,7 +162,9 @@ EMAIL_RESPONSE=$(curl -sf --max-time "$EMAIL_TIMEOUT" \
 
 log "Email response: ${EMAIL_RESPONSE}"
 
-if echo "$EMAIL_RESPONSE" | grep -q '"ok":true'; then
+if echo "$EMAIL_RESPONSE" | grep -q '"skipped":true'; then
+  log "=== Skipped: email already sent today (manual send detected) ==="
+elif echo "$EMAIL_RESPONSE" | grep -q '"ok":true'; then
   log "=== Weekly email sent successfully ==="
 else
   notify_failure "Email returned unexpected response"

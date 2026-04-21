@@ -15,7 +15,7 @@ npm run lint       # ESLint check
 npm run test       # Run Vitest tests
 npm run test:watch # Vitest in watch mode
 npm run email:send      # Manually trigger price refresh + weekly email
-npm run email:install   # Install launchd job (Friday 4:20 PM)
+npm run email:install   # Install launchd job (Friday 4:45 PM)
 npm run email:uninstall # Remove launchd job
 npm run email:status    # Check if launchd job is loaded
 ```
@@ -30,7 +30,7 @@ npm run email:status    # Check if launchd job is loaded
 - **AI**: @anthropic-ai/sdk (Claude Sonnet for weekly email commentary)
 - **Prices**: Polygon.io API (free tier, 5 calls/min) + IBKR TWS fallback via @stoqey/ib
 - **Market Context**: Vital Knowledge email digests via IMAP (imapflow)
-- **Testing**: Vitest (275 tests)
+- **Testing**: Vitest (290 tests)
 
 ## Architecture
 
@@ -138,6 +138,8 @@ Originally a single-file React app (Jan 14, 2026), ported to this Next.js projec
 **Apr 13**: Professionalized dashboard with brokerage-style features. Added period selector (1D/1W/1M/YTD/All) controlling leaderboard returns and chart date range. S&P 500 benchmark line on performance chart via `POST /api/prices/benchmark` (IBKR primary, Polygon fallback, stored as `__BENCHMARK_SPY` in `priceHistory`). Enhanced player detail cards with stats grid (cash, unrealized/realized P&L, win rate with W-L record) and compact two-line position cards (market value, portfolio weight %, daily change, days held). Extracted DashboardTab into PeriodSelector, PerformanceChart, and PlayerDetailCard sub-components. Polished chart: lighter grid, 0% reference line, smaller dots, indigo dashed S&P line, rounded tooltip with weekday. New pure functions in `lib/contest.ts`: `getPeriodReturn`, `getPositionDailyChange`, `getPositionDaysHeld`, `getBenchmarkReturnAtDate`. 275 tests (23 new).
 
 **Apr 19**: Weekly email quality overhaul, triggered by Daddy asking whether his SEDG trade was reflected in his portfolio value (it was — realized gain flowed through cash) and separately by noticing that the Apr 17 AI commentary named the wrong "best performer", missed trades, and referenced trades closed the week before. Fixed three root causes: (1) email breakdown — added per-player "Closed Trades to Date" table and relabeled summary as "Net Realized P&L (N wins / N losses)" so individual wins like SEDG are visible instead of being hidden inside a net-negative total; (2) fencepost bug — `getWeeklyTrades` used inclusive date bounds on both ends, so Friday trades appeared in two consecutive weekly emails. Anchored the window to NYSE close: `(last Fri 4:00 PM ET, this Fri 4:00 PM ET]`, new `getMarketCloseTimestamp` helper handles EST/EDT via Intl; (3) AI prompt quality — pre-ranked "Biggest weekly moves per player" block so the model doesn't guess, trade annotations now show `PARTIAL TRIM (position: N -> M shares)` + realized P&L per sell, added STRICT RULES for activity coverage, scope (no out-of-window trades), position-count integrity, and stricter "across all portfolios" check. 278 tests (3 new boundary tests).
+
+**Apr 20**: Four improvements, shipped as PR #1 (`player-metrics-and-email-automation`): (1) Fixed the "% today" pill that had silently shown +0.0% on every position forever — `getPositionDailyChange` was reading today's entry (price refresh routes store today under today's date) as "yesterday's close", so delta was always 0; now filters to dates strictly before today. (2) Added Realized Losses and annualized Sharpe Ratio tiles to player cards (grid now 3×2); Sharpe uses daily portfolio-value returns × √252, RF=0, composed from existing `getPlayerValueAtDate`. (3) Fixed the stuck S&P 500 chart line — the "Load S&P 500" button was conditionally hidden once data existed and no automated flow touched `/api/prices/benchmark`, so the benchmark silently froze at whatever date the button was last clicked; now wired into the Refresh Prices flow + weekly cron. (4) Installed the weekly-email launchd agent (was never actually loaded — log last ran Feb 13) at Fri 4:45 PM ET (was 4:20), giving a 45-minute post-close manual-review window; added same-day idempotency guard to `POST /api/email/weekly` with `body.force` override and `body.to` (test-send) bypass, preventing manual+cron double-sends. 290 tests (+12: 5 idempotency, 4 Sharpe, 2 % today regression, 1 realized-losses). Session lesson: accidentally sent a real weekly email to 3 recipients while verifying the idempotency fix via curl — Turbopack hadn't picked up the `lib/db.ts` change, so cached pre-guard code ran. Saved as a memory: never live-test a send-skip guard, always unit-mock first.
 
 Seed data: 3 players, 17 trades, prices through Jan 30 — load via Settings > Import from `data/stock-contest-2026-01-30.json`.
 

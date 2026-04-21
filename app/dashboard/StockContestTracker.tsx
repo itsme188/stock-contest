@@ -370,7 +370,10 @@ export default function StockContestTracker() {
 
   // --- Derived Data ---
 
-  const leaderboard = useMemo(() => getLeaderboard(players, trades, currentPrices), [players, trades, currentPrices]);
+  const leaderboard = useMemo(
+    () => getLeaderboard(players, trades, currentPrices, priceHistory, contestStartDate),
+    [players, trades, currentPrices, priceHistory, contestStartDate]
+  );
   const benchmarkHistory = useMemo(() => priceHistory[BENCHMARK_KEY] || undefined, [priceHistory]);
   const chartData = useMemo(() => getPerformanceChartData(players, trades, currentPrices, priceHistory, undefined, contestStartDate, benchmarkHistory), [players, trades, currentPrices, priceHistory, contestStartDate, benchmarkHistory]);
 

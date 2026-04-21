@@ -50,6 +50,7 @@ export interface PlayerStats {
   totalReturn: number;
   returnPct: number;
   realizedGains: number;
+  realizedLosses: number;
   unrealizedGains: number;
   positions: Position[];
   closedTrades: ClosedTrade[];
@@ -59,6 +60,7 @@ export interface PlayerStats {
   bestTrade: ClosedTrade | null;
   worstTrade: ClosedTrade | null;
   totalTrades: number;
+  sharpeRatio: number | null;
 }
 
 export type LeaderboardEntry = Player & PlayerStats;
@@ -209,7 +211,9 @@ export function getPriceAtDate(
 export function getPlayerStats(
   playerId: string,
   trades: Trade[],
-  currentPrices: Record<string, number>
+  currentPrices: Record<string, number>,
+  priceHistory?: Record<string, Record<string, number>>,
+  contestStartDate?: string
 ): PlayerStats {
   const playerTrades = trades.filter((t) => t.playerId === playerId);
   const positions = getPlayerPositions(playerId, trades);
@@ -315,6 +319,15 @@ export function getPlayerStats(
         )
       : null;
 
+  const realizedLosses = closedTrades
+    .filter((t) => t.gain < 0)
+    .reduce((sum, t) => sum + t.gain, 0);
+
+  const sharpeRatio =
+    priceHistory && contestStartDate
+      ? getPlayerSharpeRatio(playerId, trades, priceHistory, contestStartDate)
+      : null;
+
   return {
     cashRemaining,
     portfolioValue,
@@ -322,6 +335,7 @@ export function getPlayerStats(
     totalReturn,
     returnPct,
     realizedGains,
+    realizedLosses,
     unrealizedGains,
     positions,
     closedTrades,
@@ -331,17 +345,26 @@ export function getPlayerStats(
     bestTrade,
     worstTrade,
     totalTrades: playerTrades.length,
+    sharpeRatio,
   };
 }
 
 export function getLeaderboard(
   players: Player[],
   trades: Trade[],
-  currentPrices: Record<string, number>
+  currentPrices: Record<string, number>,
+  priceHistory?: Record<string, Record<string, number>>,
+  contestStartDate?: string
 ): LeaderboardEntry[] {
   return players
     .map((player) => {
-      const stats = getPlayerStats(player.id, trades, currentPrices);
+      const stats = getPlayerStats(
+        player.id,
+        trades,
+        currentPrices,
+        priceHistory,
+        contestStartDate
+      );
       return { ...player, ...stats };
     })
     .sort((a, b) => b.returnPct - a.returnPct);
@@ -392,6 +415,59 @@ export function getPlayerValueAtDate(
 
   const cashRemaining = STARTING_CASH - cashSpent + cashReceived;
   return cashRemaining + portfolioValue;
+}
+
+// Annualized Sharpe ratio computed from the daily time series of total
+// portfolio value. Because players have no cash flows after the initial
+// STARTING_CASH deposit, day-over-day portfolio-value returns are a clean
+// measure of investment performance. Returns null if fewer than 2 usable
+// daily returns exist or stdev is 0.
+export function getPlayerSharpeRatio(
+  playerId: string,
+  trades: Trade[],
+  priceHistory: Record<string, Record<string, number>>,
+  contestStartDate: string,
+  options?: { annualRiskFreeRate?: number; today?: string }
+): number | null {
+  const annualRF = options?.annualRiskFreeRate ?? 0;
+  const today = options?.today || new Date().toISOString().split("T")[0];
+  const dailyRF = annualRF / 252;
+
+  const dateSet = new Set<string>();
+  trades
+    .filter((t) => t.playerId === playerId)
+    .forEach((t) => dateSet.add(t.date));
+  Object.values(priceHistory).forEach((history) => {
+    Object.keys(history).forEach((d) => dateSet.add(d));
+  });
+
+  const dates = [...dateSet]
+    .filter((d) => d >= contestStartDate && d <= today)
+    .sort();
+  if (dates.length < 2) return null;
+
+  const values = dates.map((d) =>
+    getPlayerValueAtDate(playerId, d, trades, priceHistory)
+  );
+
+  const excessReturns: number[] = [];
+  for (let i = 1; i < values.length; i++) {
+    const prev = values[i - 1];
+    if (prev <= 0) continue;
+    const r = (values[i] - prev) / prev;
+    excessReturns.push(r - dailyRF);
+  }
+  if (excessReturns.length < 2) return null;
+
+  const mean =
+    excessReturns.reduce((sum, r) => sum + r, 0) / excessReturns.length;
+  const variance =
+    excessReturns.reduce((sum, r) => sum + (r - mean) ** 2, 0) /
+    (excessReturns.length - 1);
+  const stdev = Math.sqrt(variance);
+  if (stdev === 0) return null;
+
+  return (mean / stdev) * Math.sqrt(252);
 }
 
 export function getPerformanceChartData(
@@ -600,16 +676,21 @@ export function getPeriodReturn(
 export function getPositionDailyChange(
   ticker: string,
   currentPrice: number,
-  priceHistory: Record<string, Record<string, number>>
+  priceHistory: Record<string, Record<string, number>>,
+  today?: string
 ): { changeDollar: number; changePct: number } | null {
   const history = priceHistory[ticker];
   if (!history) return null;
 
-  const dates = Object.keys(history).sort();
-  if (dates.length === 0) return null;
+  // Price refresh routes store today's price under today's date, so we must
+  // exclude any entry >= today when looking for the "previous close".
+  const resolvedToday = today || new Date().toISOString().split("T")[0];
+  const previousDates = Object.keys(history)
+    .filter((d) => d < resolvedToday)
+    .sort();
+  if (previousDates.length === 0) return null;
 
-  // Get the most recent historical price (yesterday or last trading day)
-  const previousPrice = history[dates[dates.length - 1]];
+  const previousPrice = history[previousDates[previousDates.length - 1]];
   if (!previousPrice || previousPrice === 0) return null;
 
   return {
