@@ -1,3 +1,5 @@
+import { formatLocalYMD, localToday, parseLocalDate } from "./dates";
+
 // --- Types ---
 
 export interface Player {
@@ -430,7 +432,7 @@ export function getPlayerSharpeRatio(
   options?: { annualRiskFreeRate?: number; today?: string }
 ): number | null {
   const annualRF = options?.annualRiskFreeRate ?? 0;
-  const today = options?.today || new Date().toISOString().split("T")[0];
+  const today = options?.today || localToday();
   const dailyRF = annualRF / 252;
 
   const dateSet = new Set<string>();
@@ -481,7 +483,7 @@ export function getPerformanceChartData(
 ): Record<string, string>[] {
   if (players.length === 0 || trades.length === 0) return [];
 
-  const resolvedToday = today || new Date().toISOString().split("T")[0];
+  const resolvedToday = today || localToday();
   const resolvedStart = contestStartDate || "2026-01-01";
 
   const dateSet = new Set<string>(trades.map((t) => t.date));
@@ -609,22 +611,22 @@ export function getPeriodStartDate(
   contestStartDate: string,
   today?: string
 ): string {
-  const t = today ? new Date(today + "T12:00:00") : new Date();
+  const t = today ? parseLocalDate(today) : new Date();
   switch (period) {
     case "1D": {
       const d = new Date(t);
       d.setDate(d.getDate() - 1);
-      return d.toISOString().split("T")[0];
+      return formatLocalYMD(d);
     }
     case "1W": {
       const d = new Date(t);
       d.setDate(d.getDate() - 7);
-      return d.toISOString().split("T")[0];
+      return formatLocalYMD(d);
     }
     case "1M": {
       const d = new Date(t);
       d.setDate(d.getDate() - 30);
-      return d.toISOString().split("T")[0];
+      return formatLocalYMD(d);
     }
     case "YTD": {
       return `${t.getFullYear()}-01-01`;
@@ -684,7 +686,7 @@ export function getPositionDailyChange(
 
   // Price refresh routes store today's price under today's date, so we must
   // exclude any entry >= today when looking for the "previous close".
-  const resolvedToday = today || new Date().toISOString().split("T")[0];
+  const resolvedToday = today || localToday();
   const previousDates = Object.keys(history)
     .filter((d) => d < resolvedToday)
     .sort();

@@ -12,6 +12,12 @@ import {
   formatCurrency,
   formatPercent,
 } from "@/lib/contest";
+import {
+  formatDateDisplay,
+  formatLocalYMD,
+  localToday,
+  parseLocalDate,
+} from "@/lib/dates";
 
 // ---------- Types ----------
 
@@ -65,7 +71,7 @@ export function getMarketCloseTimestamp(dateStr: string): number {
 }
 
 export function getWeeklyTrades(trades: Trade[], asOfDate?: string): Trade[] {
-  const reportDate = asOfDate || new Date().toISOString().split("T")[0];
+  const reportDate = asOfDate || localToday();
   const endTs = getMarketCloseTimestamp(reportDate);
   const startTs = endTs - 7 * 24 * 60 * 60 * 1000;
   // Half-open window (startTs, endTs]: a trade at the start cutoff belongs to
@@ -82,12 +88,12 @@ export function buildReportData(
   priceHistory: Record<string, Record<string, number>> = {},
   asOfDate?: string
 ): WeeklyReportData {
-  const reportDate = asOfDate || new Date().toISOString().split("T")[0];
+  const reportDate = asOfDate || localToday();
   const endTs = getMarketCloseTimestamp(reportDate);
   const startTs = endTs - 7 * 24 * 60 * 60 * 1000;
-  const oneWeekAgo = new Date(reportDate);
+  const oneWeekAgo = parseLocalDate(reportDate);
   oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
-  const cutoffDate = oneWeekAgo.toISOString().split("T")[0];
+  const cutoffDate = formatLocalYMD(oneWeekAgo);
 
   const currentLeaderboard = getLeaderboard(players, trades, currentPrices);
 
@@ -155,10 +161,10 @@ const BANNED_WORDS = [
 export function buildCommentaryPrompt(data: WeeklyReportData, marketContext?: string): string {
   const { leaderboard, weeklyTrades, weekDeltas, players, currentPrices, priceHistory, trades, reportDate } = data;
 
-  const now = new Date(reportDate);
+  const now = parseLocalDate(reportDate);
   const oneWeekAgo = new Date(now);
   oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
-  const cutoffDate = oneWeekAgo.toISOString().split("T")[0];
+  const cutoffDate = formatLocalYMD(oneWeekAgo);
 
   // Per-player, per-position weekly % price change (used twice below).
   const weeklyMovesByPlayer = leaderboard.map((p) => {
@@ -424,7 +430,7 @@ export function buildEmailHtml(
         const typeBg = t.type === "buy" ? "#DCFCE7" : "#FEE2E2";
         const typeColor = t.type === "buy" ? "#15803D" : "#DC2626";
         return `<tr style="border-bottom: 1px solid #F3F4F6;">
-          <td style="padding: 10px 12px; font-size: 13px; color: #4B5563;">${new Date(t.date).toLocaleDateString()}</td>
+          <td style="padding: 10px 12px; font-size: 13px; color: #4B5563;">${formatDateDisplay(t.date)}</td>
           <td style="padding: 10px 12px; font-size: 13px; font-weight: 500; color: #111827;">${player?.name}</td>
           <td style="padding: 10px 12px;">
             <span style="display: inline-block; padding: 2px 8px; border-radius: 9999px; font-size: 11px; font-weight: 600; background: ${typeBg}; color: ${typeColor};">${t.type.toUpperCase()}</span>

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getContestData, saveContestData } from "@/lib/db";
 import { type Player, type Trade, getPlayerPositions } from "@/lib/contest";
+import { localToday } from "@/lib/dates";
 import {
   IBApi,
   EventName,
@@ -165,7 +166,7 @@ export async function POST() {
     const updated: Record<string, number> = {};
     const priceDates: Record<string, string> = {};
     const errors: string[] = [];
-    const today = new Date().toISOString().split("T")[0];
+    const today = localToday();
     let reqId = 1;
 
     for (const ticker of openTickers) {

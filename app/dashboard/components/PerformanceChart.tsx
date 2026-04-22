@@ -11,6 +11,7 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import { type Player, type Period, getPeriodStartDate } from "@/lib/contest";
+import { formatDateDisplay } from "@/lib/dates";
 
 interface PerformanceChartProps {
   chartData: Record<string, string>[];
@@ -71,7 +72,7 @@ export default function PerformanceChart({
               dataKey="date"
               tick={{ fontSize: 12, fill: "#9CA3AF" }}
               tickFormatter={(date: string) =>
-                new Date(date).toLocaleDateString("en-US", {
+                formatDateDisplay(date, {
                   month: "short",
                   day: "numeric",
                 })
@@ -91,7 +92,7 @@ export default function PerformanceChart({
               }}
               formatter={(value) => [`${Number(value).toFixed(2)}%`, ""]}
               labelFormatter={(date) =>
-                new Date(date).toLocaleDateString("en-US", {
+                formatDateDisplay(String(date), {
                   weekday: "short",
                   month: "short",
                   day: "numeric",

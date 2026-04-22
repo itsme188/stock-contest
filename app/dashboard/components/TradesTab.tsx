@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import {
   type Player,
   type Trade,
@@ -9,6 +10,7 @@ import {
   getPlayerStats,
   formatCurrency,
 } from "@/lib/contest";
+import { formatDateDisplay, localToday } from "@/lib/dates";
 
 interface TradesTabProps {
   players: Player[];
@@ -39,6 +41,14 @@ export default function TradesTab({
   fetchingPrice,
   fetchPriceAndCalculateShares,
 }: TradesTabProps) {
+  // Refresh the trade date to today whenever the modal opens, so a long-lived
+  // dashboard tab doesn't silently keep yesterday's default.
+  useEffect(() => {
+    if (showAddTrade) {
+      setTradeForm((prev) => ({ ...prev, date: localToday() }));
+    }
+  }, [showAddTrade, setTradeForm]);
+
   return (
     <div className="space-y-4">
       <div className="flex justify-between items-center">
@@ -134,8 +144,7 @@ export default function TradesTab({
                   }
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 />
-                {tradeForm.date <
-                  new Date().toISOString().split("T")[0] && (
+                {tradeForm.date < localToday() && (
                   <p className="text-xs text-blue-600 mt-1">
                     Historical date - will fetch opening price for this date
                   </p>
@@ -386,7 +395,7 @@ export default function TradesTab({
                   return (
                     <tr key={trade.id} className="hover:bg-gray-50">
                       <td className="px-4 py-3 text-sm text-gray-600">
-                        {new Date(trade.date).toLocaleDateString()}
+                        {formatDateDisplay(trade.date)}
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2">

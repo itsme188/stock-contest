@@ -15,6 +15,7 @@ import {
   getPlayerStats,
   validateTrade,
 } from "@/lib/contest";
+import { formatDateDisplay, localToday } from "@/lib/dates";
 import DashboardTab from "./components/DashboardTab";
 import TradesTab from "./components/TradesTab";
 import PlayersTab from "./components/PlayersTab";
@@ -53,7 +54,7 @@ export default function StockContestTracker() {
     ticker: "",
     shares: "",
     price: "",
-    date: new Date().toISOString().split("T")[0],
+    date: localToday(),
   });
 
   // Track whether initial load is complete to avoid saving default state
@@ -201,9 +202,9 @@ export default function StockContestTracker() {
       } else if (data.priceType === "current") {
         setPriceError(`Current price (${data.source === "ibkr" ? "IBKR" : "Polygon"})`);
       } else if (data.priceType === "close") {
-        setPriceError(`Closing price, ${new Date(data.date + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })} (${data.source === "ibkr" ? "IBKR" : "Polygon"})`);
+        setPriceError(`Closing price, ${formatDateDisplay(data.date, { month: "short", day: "numeric" })} (${data.source === "ibkr" ? "IBKR" : "Polygon"})`);
       } else if (data.priceType === "open") {
-        setPriceError(`Opening price, ${new Date(data.date + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })} (${data.source === "ibkr" ? "IBKR" : "Polygon"})`);
+        setPriceError(`Opening price, ${formatDateDisplay(data.date, { month: "short", day: "numeric" })} (${data.source === "ibkr" ? "IBKR" : "Polygon"})`);
       }
 
       setTradeForm((prev) => ({ ...prev, price: data.price.toFixed(2) }));
@@ -293,7 +294,7 @@ export default function StockContestTracker() {
         ticker: "",
         shares: "",
         price: "",
-        date: new Date().toISOString().split("T")[0],
+        date: localToday(),
       });
       setShowAddTrade(false);
     } catch (err) {
@@ -327,7 +328,7 @@ export default function StockContestTracker() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `stock-contest-${new Date().toISOString().split("T")[0]}.json`;
+    a.download = `stock-contest-${localToday()}.json`;
     a.click();
   };
 
@@ -399,7 +400,7 @@ export default function StockContestTracker() {
                 Stock Picking Contest
               </h1>
               <p className="text-sm text-gray-500 mt-1">
-                Started: {new Date(contestStartDate).toLocaleDateString()}
+                Started: {formatDateDisplay(contestStartDate)}
               </p>
             </div>
             <div className="flex gap-2">

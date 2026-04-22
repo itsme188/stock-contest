@@ -1,5 +1,6 @@
 import { getContestData, saveContestData } from "@/lib/db";
 import { type Trade, BENCHMARK_KEY } from "@/lib/contest";
+import { localToday } from "@/lib/dates";
 import {
   IBApi,
   EventName,
@@ -196,7 +197,7 @@ async function backfillViaPolygon(
   priceHistory: PriceHistory
 ): Promise<BackfillResult> {
   const from = contestStartDate;
-  const to = new Date().toISOString().split("T")[0];
+  const to = localToday();
   let daysAdded = 0;
   const errors: string[] = [];
 

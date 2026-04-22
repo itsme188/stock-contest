@@ -8,6 +8,7 @@ import {
 } from "@/lib/email";
 import { fetchVitalKnowledge } from "@/lib/vital-knowledge";
 import { backfillPrices } from "@/lib/prices";
+import { localToday } from "@/lib/dates";
 
 export async function POST(request: Request) {
   try {
@@ -18,7 +19,7 @@ export async function POST(request: Request) {
     };
 
     const testTo = body.to;
-    const today = new Date().toISOString().split("T")[0];
+    const today = localToday();
 
     // Idempotency: refuse a second real send on the same day unless explicitly
     // forced. Test sends (body.to) bypass the check so dry-runs can be retried.

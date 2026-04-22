@@ -12,6 +12,7 @@ import {
   formatCurrency,
   formatPercent,
 } from "@/lib/contest";
+import { formatDateDisplay } from "@/lib/dates";
 import PeriodSelector from "./PeriodSelector";
 import PerformanceChart from "./PerformanceChart";
 import PlayerDetailCard from "./PlayerDetailCard";
@@ -350,7 +351,7 @@ export default function DashboardTab({
                 {staleness.stale ? (
                   <span className="text-amber-600 font-medium">
                     Prices last updated: {staleness.latestDate
-                      ? `${new Date(staleness.latestDate + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })} (${staleness.daysOld} day${staleness.daysOld !== 1 ? "s" : ""} ago)`
+                      ? `${formatDateDisplay(staleness.latestDate, { month: "short", day: "numeric" })} (${staleness.daysOld} day${staleness.daysOld !== 1 ? "s" : ""} ago)`
                       : "unknown"
                     }
                   </span>

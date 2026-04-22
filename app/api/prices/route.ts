@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getContestData } from "@/lib/db";
+import { formatLocalYMD, localToday, parseLocalDate } from "@/lib/dates";
 import {
   IBApi,
   EventName,
@@ -169,7 +170,7 @@ async function fetchPriceViaIBKR(
   ticker: string,
   date: string | null
 ): Promise<PriceResult | null> {
-  const today = new Date().toISOString().split("T")[0];
+  const today = localToday();
   const isToday = !date || date === today;
 
   if (isToday) {
@@ -210,14 +211,14 @@ async function fetchPriceViaPolygon(
   date: string | null,
   polygonApiKey: string
 ): Promise<PriceResult | null> {
-  const today = new Date().toISOString().split("T")[0];
+  const today = localToday();
 
   if (date && date !== today) {
     // Historical date — open price
     for (let dayOffset = 0; dayOffset < 7; dayOffset++) {
-      const checkDate = new Date(date);
+      const checkDate = parseLocalDate(date);
       checkDate.setDate(checkDate.getDate() + dayOffset);
-      const dateStr = checkDate.toISOString().split("T")[0];
+      const dateStr = formatLocalYMD(checkDate);
 
       const url = `https://api.polygon.io/v1/open-close/${ticker}/${dateStr}?adjusted=true&apiKey=${polygonApiKey}`;
       const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
@@ -255,7 +256,7 @@ async function fetchPriceViaPolygon(
     if (typeof closePrice === "number" && isFinite(closePrice) && closePrice > 0) {
       return {
         price: closePrice,
-        date: new Date().toISOString().split("T")[0],
+        date: localToday(),
         priceType: "close",
       };
     }
