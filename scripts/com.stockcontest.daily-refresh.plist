@@ -8,7 +8,7 @@
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
-        <string>/Users/Yitzi/Desktop/stock-contest/scripts/daily-refresh.sh</string>
+        <string>/Users/Yitzi/Library/Application Support/stock-contest/scripts/daily-refresh.sh</string>
     </array>
 
     <key>StartCalendarInterval</key>
@@ -66,10 +66,10 @@
     </array>
 
     <key>StandardOutPath</key>
-    <string>/Users/Yitzi/Desktop/stock-contest/data/logs/launchd-daily-refresh-stdout.log</string>
+    <string>/Users/Yitzi/Library/Application Support/stock-contest/logs/launchd-daily-refresh-stdout.log</string>
 
     <key>StandardErrorPath</key>
-    <string>/Users/Yitzi/Desktop/stock-contest/data/logs/launchd-daily-refresh-stderr.log</string>
+    <string>/Users/Yitzi/Library/Application Support/stock-contest/logs/launchd-daily-refresh-stderr.log</string>
 
     <key>ProcessType</key>
     <string>Background</string>

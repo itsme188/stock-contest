@@ -5,7 +5,9 @@
 set -euo pipefail
 
 BASE_URL="http://localhost:3001"
-LOG_DIR="/Users/Yitzi/Desktop/stock-contest/data/logs"
+# Logs live outside ~/Desktop/ because launchd is blocked by macOS TCC from
+# touching files there. ~/Library/Application Support/ is non-protected.
+LOG_DIR="$HOME/Library/Application Support/stock-contest/logs"
 LOG_FILE="${LOG_DIR}/weekly-email.log"
 PRICE_TIMEOUT=300
 EMAIL_TIMEOUT=120
