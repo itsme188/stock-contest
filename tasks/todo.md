@@ -21,7 +21,9 @@
 - [x] IBKR refresh button on Dashboard
 - [x] Integrate Vital Knowledge (vitalknowledge.net) market commentary into weekly email (shipped Feb 27 session 3; hardened Mar 13 and Mar 27 — see CLAUDE.md)
 - [x] Fix wrong "% today" on position cards — daily launchd refresh Mon-Fri x {9:31, 16:20} (IBKR primary, Polygon fallback, backfill on every run) + 4-day staleness guard in `getPositionDailyChange` + weekly-email.sh flipped to IBKR-first (2026-04-24, `3a950b3`)
+- [x] Add silent-failure watchdog to daily-refresh.sh — macOS notification when last run was >72h ago (2026-04-24, `4120326`)
+- [x] Unblock launchd TCC by moving scripts out of ~/Desktop/ — scripts/install-launchd.sh + ~/Library/Application Support/stock-contest/ as the launchd-executable install location; fixes weekly email silently failing since Feb 13 (2026-04-24, `b7ce3ea`)
 
 ## Planned
 
-_(Nothing active.)_
+- [ ] **Optional:** `/api/backup` endpoint so DB backup can run from launchd. Currently `backup-db.sh` is non-fatal but always fails under launchd (TCC blocks reading `~/Desktop/stock-contest/data/contest.db`). The Next.js server has Desktop access via Terminal/.app launch, so an authenticated POST endpoint that writes to `~/Library/Application Support/stock-contest/backups/` would restore automated backups. Not urgent — manual backups still work.
