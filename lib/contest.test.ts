@@ -1155,7 +1155,7 @@ describe("getPositionDailyChange", () => {
     const priceHistory = {
       AAPL: { "2026-04-11": 118, "2026-04-12": 119 },
     };
-    const result = getPositionDailyChange("AAPL", 121, priceHistory);
+    const result = getPositionDailyChange("AAPL", 121, priceHistory, "2026-04-13");
     expect(result).not.toBeNull();
     expect(result!.changeDollar).toBeCloseTo(2, 2);
     expect(result!.changePct).toBeCloseTo((2 / 119) * 100, 2);
@@ -1171,7 +1171,7 @@ describe("getPositionDailyChange", () => {
 
   it("handles negative daily change", () => {
     const priceHistory = { AAPL: { "2026-04-12": 125 } };
-    const result = getPositionDailyChange("AAPL", 120, priceHistory);
+    const result = getPositionDailyChange("AAPL", 120, priceHistory, "2026-04-13");
     expect(result!.changeDollar).toBe(-5);
     expect(result!.changePct).toBeCloseTo(-4, 0);
   });
@@ -1193,6 +1193,22 @@ describe("getPositionDailyChange", () => {
     const today = "2026-04-20";
     const priceHistory = { AAPL: { "2026-04-20": 105 } };
     expect(getPositionDailyChange("AAPL", 105, priceHistory, today)).toBeNull();
+  });
+
+  it("returns null when the most recent prior close is more than 4 calendar days old", () => {
+    // A gap this large almost always means missing data rather than a real
+    // one-day move; displaying a multi-day delta as "% today" is misleading.
+    const today = "2026-04-24";
+    const priceHistory = { AAPL: { "2026-04-15": 100 } };
+    expect(getPositionDailyChange("AAPL", 105, priceHistory, today)).toBeNull();
+  });
+
+  it("allows a 4-day gap (covers Fri->Tue long-weekend holiday)", () => {
+    const today = "2026-04-14"; // Tue
+    const priceHistory = { AAPL: { "2026-04-10": 100 } }; // Fri before long weekend
+    const result = getPositionDailyChange("AAPL", 105, priceHistory, today);
+    expect(result).not.toBeNull();
+    expect(result!.changeDollar).toBeCloseTo(5, 2);
   });
 });
 

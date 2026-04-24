@@ -19,7 +19,11 @@
     "email:send": "bash scripts/weekly-email.sh",
     "email:install": "cp scripts/com.stockcontest.weekly-email.plist ~/Library/LaunchAgents/ && launchctl load ~/Library/LaunchAgents/com.stockcontest.weekly-email.plist && echo 'Installed and loaded.'",
     "email:uninstall": "launchctl unload ~/Library/LaunchAgents/com.stockcontest.weekly-email.plist 2>/dev/null; rm -f ~/Library/LaunchAgents/com.stockcontest.weekly-email.plist && echo 'Uninstalled.'",
-    "email:status": "launchctl list com.stockcontest.weekly-email 2>/dev/null || echo 'Not loaded.'"
+    "email:status": "launchctl list com.stockcontest.weekly-email 2>/dev/null || echo 'Not loaded.'",
+    "refresh:send": "bash scripts/daily-refresh.sh",
+    "refresh:install": "cp scripts/com.stockcontest.daily-refresh.plist ~/Library/LaunchAgents/ && launchctl load ~/Library/LaunchAgents/com.stockcontest.daily-refresh.plist && echo 'Installed and loaded.'",
+    "refresh:uninstall": "launchctl unload ~/Library/LaunchAgents/com.stockcontest.daily-refresh.plist 2>/dev/null; rm -f ~/Library/LaunchAgents/com.stockcontest.daily-refresh.plist && echo 'Uninstalled.'",
+    "refresh:status": "launchctl list com.stockcontest.daily-refresh 2>/dev/null || echo 'Not loaded.'"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.74.0",

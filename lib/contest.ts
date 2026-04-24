@@ -692,8 +692,17 @@ export function getPositionDailyChange(
     .sort();
   if (previousDates.length === 0) return null;
 
-  const previousPrice = history[previousDates[previousDates.length - 1]];
+  const previousDate = previousDates[previousDates.length - 1];
+  const previousPrice = history[previousDate];
   if (!previousPrice || previousPrice === 0) return null;
+
+  // Suppress "today" when the most recent prior close is more than 4 calendar
+  // days old. 4 covers a normal Mon-after-weekend gap (Fri->Mon = 3) plus a
+  // long-weekend holiday (Fri->Tue = 4). Anything older is almost always a
+  // data gap rather than a real 1-day move.
+  const todayMs = new Date(resolvedToday + "T00:00:00Z").getTime();
+  const prevMs = new Date(previousDate + "T00:00:00Z").getTime();
+  if (Math.round((todayMs - prevMs) / 86400000) > 4) return null;
 
   return {
     changeDollar: currentPrice - previousPrice,

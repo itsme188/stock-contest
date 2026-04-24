@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.stockcontest.daily-refresh</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/Yitzi/Desktop/stock-contest/scripts/daily-refresh.sh</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict>
+            <key>Weekday</key><integer>1</integer>
+            <key>Hour</key><integer>9</integer>
+            <key>Minute</key><integer>31</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>2</integer>
+            <key>Hour</key><integer>9</integer>
+            <key>Minute</key><integer>31</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>3</integer>
+            <key>Hour</key><integer>9</integer>
+            <key>Minute</key><integer>31</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>4</integer>
+            <key>Hour</key><integer>9</integer>
+            <key>Minute</key><integer>31</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>5</integer>
+            <key>Hour</key><integer>9</integer>
+            <key>Minute</key><integer>31</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>1</integer>
+            <key>Hour</key><integer>16</integer>
+            <key>Minute</key><integer>20</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>2</integer>
+            <key>Hour</key><integer>16</integer>
+            <key>Minute</key><integer>20</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>3</integer>
+            <key>Hour</key><integer>16</integer>
+            <key>Minute</key><integer>20</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>4</integer>
+            <key>Hour</key><integer>16</integer>
+            <key>Minute</key><integer>20</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>5</integer>
+            <key>Hour</key><integer>16</integer>
+            <key>Minute</key><integer>20</integer>
+        </dict>
+    </array>
+
+    <key>StandardOutPath</key>
+    <string>/Users/Yitzi/Desktop/stock-contest/data/logs/launchd-daily-refresh-stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/Yitzi/Desktop/stock-contest/data/logs/launchd-daily-refresh-stderr.log</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

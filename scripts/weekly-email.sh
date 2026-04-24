@@ -74,54 +74,53 @@ fi
 
 log "Server is up at ${BASE_URL}"
 
-# Refresh prices via Polygon with staleness check + retry
-log "Refreshing prices via Polygon..."
-PRICE_RESPONSE=$(curl -sf --max-time "$PRICE_TIMEOUT" \
-  -X POST "${BASE_URL}/api/prices/update" \
-  -H "Content-Type: application/json" 2>&1) || {
-  notify_failure "Price update failed or timed out"
-}
+# Refresh prices: IBKR first (fast, no rate limits, handles CAD tickers),
+# Polygon fallback with staleness check + retry if IBKR fails or returns stale
+log "Refreshing prices via IBKR TWS..."
+IBKR_RESPONSE=$(curl -sf --max-time 60 \
+  -X POST "${BASE_URL}/api/prices/ibkr" \
+  -H "Content-Type: application/json" 2>&1) || IBKR_RESPONSE=""
 
-log "Price update response: ${PRICE_RESPONSE}"
+log "IBKR response: ${IBKR_RESPONSE:-<empty>}"
 
-if echo "$PRICE_RESPONSE" | grep -q '"error"'; then
-  log "WARNING: Price update returned an error (continuing anyway): ${PRICE_RESPONSE}"
-fi
-
-# Check if prices are fresh (from today's market close)
-RETRY_COUNT=0
-while ! prices_are_fresh "$PRICE_RESPONSE" && [ "$RETRY_COUNT" -lt "$MAX_RETRIES" ]; do
-  RETRY_COUNT=$((RETRY_COUNT + 1))
-  log "Prices appear stale (not from today). Retry ${RETRY_COUNT}/${MAX_RETRIES} in ${RETRY_DELAY}s..."
-  sleep "$RETRY_DELAY"
-
-  log "Retrying Polygon price refresh..."
+PRICE_RESPONSE=""
+if [ -n "$IBKR_RESPONSE" ] \
+  && echo "$IBKR_RESPONSE" | grep -q '"ok":true' \
+  && prices_are_fresh "$IBKR_RESPONSE"; then
+  log "IBKR TWS returned fresh prices."
+  PRICE_RESPONSE="$IBKR_RESPONSE"
+else
+  log "IBKR unavailable or stale. Falling back to Polygon..."
   PRICE_RESPONSE=$(curl -sf --max-time "$PRICE_TIMEOUT" \
     -X POST "${BASE_URL}/api/prices/update" \
     -H "Content-Type: application/json" 2>&1) || {
-    log "WARNING: Polygon retry ${RETRY_COUNT} failed"
-    continue
+    notify_failure "Both IBKR and Polygon price updates failed"
   }
-  log "Retry ${RETRY_COUNT} response: ${PRICE_RESPONSE}"
-done
+  log "Polygon response: ${PRICE_RESPONSE}"
 
-# If still stale after retries, try IBKR TWS as fallback
-if ! prices_are_fresh "$PRICE_RESPONSE"; then
-  log "Prices still stale after ${MAX_RETRIES} retries. Trying IBKR TWS fallback..."
-  IBKR_RESPONSE=$(curl -sf --max-time 60 \
-    -X POST "${BASE_URL}/api/prices/ibkr" \
-    -H "Content-Type: application/json" 2>&1) || {
-    log "WARNING: IBKR TWS fallback failed (TWS may not be running). Proceeding with best available prices."
-    IBKR_RESPONSE=""
-  }
+  if echo "$PRICE_RESPONSE" | grep -q '"error"'; then
+    log "WARNING: Polygon returned an error (continuing anyway): ${PRICE_RESPONSE}"
+  fi
 
-  if [ -n "$IBKR_RESPONSE" ]; then
-    log "IBKR response: ${IBKR_RESPONSE}"
-    if echo "$IBKR_RESPONSE" | grep -q '"ok":true'; then
-      log "IBKR TWS prices fetched successfully"
-    else
-      log "WARNING: IBKR returned unexpected response. Proceeding with Polygon prices."
-    fi
+  # Retry Polygon if prices are stale (Polygon /prev updates ~15 min after close)
+  RETRY_COUNT=0
+  while ! prices_are_fresh "$PRICE_RESPONSE" && [ "$RETRY_COUNT" -lt "$MAX_RETRIES" ]; do
+    RETRY_COUNT=$((RETRY_COUNT + 1))
+    log "Polygon prices stale. Retry ${RETRY_COUNT}/${MAX_RETRIES} in ${RETRY_DELAY}s..."
+    sleep "$RETRY_DELAY"
+
+    log "Retrying Polygon price refresh..."
+    PRICE_RESPONSE=$(curl -sf --max-time "$PRICE_TIMEOUT" \
+      -X POST "${BASE_URL}/api/prices/update" \
+      -H "Content-Type: application/json" 2>&1) || {
+      log "WARNING: Polygon retry ${RETRY_COUNT} failed"
+      continue
+    }
+    log "Retry ${RETRY_COUNT} response: ${PRICE_RESPONSE}"
+  done
+
+  if ! prices_are_fresh "$PRICE_RESPONSE"; then
+    log "WARNING: Polygon still stale after ${MAX_RETRIES} retries. Proceeding with best available prices."
   fi
 fi
 
