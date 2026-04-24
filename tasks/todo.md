@@ -19,10 +19,9 @@
 - [x] Same-day closing prices — Polygon `/prev` at 4:20 PM + staleness detection + retry + IBKR TWS fallback
 - [x] IBKR TWS price endpoint (`/api/prices/ibkr`) with non-US ticker support (TSX via `.TO` suffix)
 - [x] IBKR refresh button on Dashboard
+- [x] Integrate Vital Knowledge (vitalknowledge.net) market commentary into weekly email (shipped Feb 27 session 3; hardened Mar 13 and Mar 27 — see CLAUDE.md)
+- [x] Fix wrong "% today" on position cards — daily launchd refresh Mon-Fri x {9:31, 16:20} (IBKR primary, Polygon fallback, backfill on every run) + 4-day staleness guard in `getPositionDailyChange` + weekly-email.sh flipped to IBKR-first (2026-04-24, `3a950b3`)
 
 ## Planned
 
-- [ ] **Integrate Vital Knowledge (vitalknowledge.net) market commentary into weekly email**
-  - Use existing vitalknowledge.net account to pull market commentary/analysis
-  - Feed into the weekly email as additional context alongside AI-generated commentary
-  - Could replace or supplement the Claude-generated market color with real analyst insights
+_(Nothing active.)_
