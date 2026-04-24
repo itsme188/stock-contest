@@ -232,53 +232,53 @@ describe("buildCommentaryPrompt", () => {
     expect(prompt).toContain("matter-of-fact");
   });
 
-  it("includes week-over-week change data", () => {
+  it("references the deterministic weekly highlights block", () => {
+    // The AI is told the facts are rendered above its commentary and should
+    // not restate them. The prompt must surface the highlights summary so the
+    // model has the context for rationale narrative.
     const data = buildReportData(players, trades, currentPrices, {}, "2026-02-10");
     const prompt = buildCommentaryPrompt(data);
 
-    expect(prompt).toContain("Week:");
-    expect(prompt).toContain("Realized P&L:");
-    expect(prompt).toContain("Win rate:");
+    expect(prompt).toContain("Weekly highlights");
+    expect(prompt).toContain("DO NOT restate");
+  });
+
+  it("forbids quoting dollar amounts and percentages", () => {
+    const data = buildReportData(players, trades, currentPrices, {}, "2026-02-10");
+    const prompt = buildCommentaryPrompt(data);
+
+    expect(prompt).toContain("DO NOT quote any dollar amount");
+    expect(prompt).toContain("DO NOT quote any percentage");
   });
 
   it("includes example output", () => {
     const data = buildReportData(players, trades, currentPrices, {}, "2026-02-10");
     const prompt = buildCommentaryPrompt(data);
 
-    expect(prompt).toContain("EXAMPLE:");
+    expect(prompt).toContain("EXAMPLE");
+    expect(prompt).toContain("Semiconductor strength");
   });
 
-  it("includes weekly price change when priceHistory available", () => {
-    const history = { AAPL: { "2026-02-03": 50 }, GOOG: { "2026-02-03": 180 } };
-    const data = buildReportData(players, trades, currentPrices, history, "2026-02-10");
-    const prompt = buildCommentaryPrompt(data);
-
-    // AAPL: was $50, now $55 = +10% this week
-    expect(prompt).toContain("this week");
-    expect(prompt).toContain("total");
-  });
-
-  it("includes market context when provided", () => {
+  it("includes VK market context body when provided", () => {
     const data = buildReportData(players, trades, currentPrices, {}, "2026-02-10");
     const prompt = buildCommentaryPrompt(data, "S&P 500 fell 1.5% on tariff fears.");
 
-    expect(prompt).toContain("MARKET CONTEXT");
     expect(prompt).toContain("S&P 500 fell 1.5% on tariff fears.");
-    expect(prompt).toContain("Contest data is still the primary focus");
+    expect(prompt).toContain("Vital Knowledge");
   });
 
-  it("omits market context section when not provided", () => {
+  it("omits VK block when market context is not provided", () => {
     const data = buildReportData(players, trades, currentPrices, {}, "2026-02-10");
     const prompt = buildCommentaryPrompt(data);
 
-    expect(prompt).not.toContain("MARKET CONTEXT");
+    expect(prompt).not.toContain("Vital Knowledge newsletter digests");
   });
 
-  it("omits market context section when empty string", () => {
+  it("omits VK block when market context is empty string", () => {
     const data = buildReportData(players, trades, currentPrices, {}, "2026-02-10");
     const prompt = buildCommentaryPrompt(data, "");
 
-    expect(prompt).not.toContain("MARKET CONTEXT");
+    expect(prompt).not.toContain("Vital Knowledge newsletter digests");
   });
 });
 

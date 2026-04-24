@@ -34,14 +34,21 @@ export async function POST() {
     }
 
     const reportData = buildReportData(players, trades, currentPrices, priceHistory);
-    const marketContext = gmailAddress && gmailAppPassword
+    const vkStatus: { chars: number; credsConfigured: boolean; preview: string } = {
+      chars: 0,
+      credsConfigured: Boolean(gmailAddress && gmailAppPassword),
+      preview: "",
+    };
+    const marketContext = vkStatus.credsConfigured
       ? await fetchVitalKnowledge(gmailAddress, gmailAppPassword)
       : "";
-    console.log(`[Email Preview] VK market context: ${marketContext ? `${marketContext.length} chars` : "empty (no credentials or fetch failed)"}`);
+    vkStatus.chars = marketContext?.length ?? 0;
+    vkStatus.preview = marketContext ? marketContext.slice(0, 160) : "";
+    console.log(`[Email Preview] VK market context: ${vkStatus.chars ? `${vkStatus.chars} chars` : vkStatus.credsConfigured ? "empty (fetch failed)" : "empty (no credentials)"}`);
     const commentary = await generateCommentary(reportData, anthropicApiKey, aiModel, marketContext);
     const html = buildEmailHtml(reportData, commentary);
 
-    return NextResponse.json({ html, commentary, reportDate: reportData.reportDate });
+    return NextResponse.json({ html, commentary, reportDate: reportData.reportDate, vk: vkStatus });
   } catch (err) {
     return NextResponse.json(
       {

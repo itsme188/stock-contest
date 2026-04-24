@@ -4,6 +4,8 @@ import React, { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
 import { htmlToCommentaryMarkdown } from "@/lib/commentary";
 
+type VkStatus = { chars: number; credsConfigured: boolean; preview: string };
+
 export default function EmailPreview() {
   const [html, setHtml] = useState("");
   const [commentary, setCommentary] = useState("");
@@ -13,6 +15,7 @@ export default function EmailPreview() {
   const [sending, setSending] = useState(false);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
+  const [vk, setVk] = useState<VkStatus | null>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
   const edited = commentary !== originalCommentary && originalCommentary !== "";
@@ -29,6 +32,7 @@ export default function EmailPreview() {
       setCommentary(data.commentary);
       setOriginalHtml(data.html);
       setOriginalCommentary(data.commentary);
+      setVk(data.vk ?? null);
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "Failed to generate preview"
@@ -185,6 +189,29 @@ export default function EmailPreview() {
             >
               {error || status}
             </p>
+          </div>
+        )}
+
+        {/* VK market-context diagnostic */}
+        {vk && (
+          <div className="max-w-4xl mx-auto px-4 pb-3">
+            <div
+              className={`text-xs px-3 py-2 rounded-lg inline-block ${
+                vk.chars > 0
+                  ? "bg-green-50 text-green-800 border border-green-200"
+                  : vk.credsConfigured
+                  ? "bg-amber-50 text-amber-800 border border-amber-200"
+                  : "bg-gray-50 text-gray-600 border border-gray-200"
+              }`}
+              title={vk.preview || undefined}
+            >
+              <span className="font-semibold">Vital Knowledge:</span>{" "}
+              {vk.chars > 0
+                ? `${vk.chars.toLocaleString()} chars of market context attached`
+                : vk.credsConfigured
+                ? "fetch returned empty (IMAP error or no matching emails)"
+                : "not configured (Gmail creds missing in Settings)"}
+            </div>
           </div>
         )}
       </div>

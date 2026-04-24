@@ -158,6 +158,118 @@ const BANNED_WORDS = [
   "impressive", "exciting", "fantastic", "incredible", "remarkable",
 ];
 
+// ---------- Deterministic Weekly Highlights ----------
+//
+// The AI prompt historically asked the model to identify the biggest gainer,
+// best/worst position per player, and attribute weekly % changes — and it
+// routinely got these wrong (leading with narratively-convenient tickers
+// instead of the actual top mover, assigning weekly % to positions that
+// didn't exist at week-start, fabricating values). These are deterministic
+// computations; code does them and the email renders the result directly.
+// The AI then writes prose ABOVE/AROUND these facts, not IN PLACE of them.
+
+export interface PlayerHighlight {
+  playerId: string;
+  name: string;
+  best: { ticker: string; pct: number } | null;
+  worst: { ticker: string; pct: number } | null;
+  newThisWeek: string[];
+  tradeCount: number;
+}
+
+export interface WeeklyHighlights {
+  contestTop: { ticker: string; pct: number; player: string } | null;
+  contestBottom: { ticker: string; pct: number; player: string } | null;
+  perPlayer: PlayerHighlight[];
+}
+
+export function buildWeeklyHighlights(data: WeeklyReportData): WeeklyHighlights {
+  const { leaderboard, weeklyTrades, currentPrices, priceHistory, trades, reportDate } = data;
+
+  const now = parseLocalDate(reportDate);
+  const oneWeekAgo = new Date(now);
+  oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+  const cutoffDate = formatLocalYMD(oneWeekAgo);
+
+  const isNewThisWeek = (pos: { ticker: string; trades: Trade[] }) =>
+    pos.trades.length > 0 && pos.trades.every((t) => t.date >= cutoffDate);
+
+  const perPlayer: PlayerHighlight[] = leaderboard.map((p) => {
+    const moves = p.positions
+      .filter((pos) => !isNewThisWeek(pos))
+      .map((pos) => {
+        const curPrice = getCurrentPrice(pos.ticker, currentPrices, trades);
+        const weekAgoPrice = getPriceAtDate(pos.ticker, cutoffDate, priceHistory);
+        const pct =
+          weekAgoPrice && weekAgoPrice > 0
+            ? ((curPrice - weekAgoPrice) / weekAgoPrice) * 100
+            : null;
+        return pct !== null ? { ticker: pos.ticker, pct } : null;
+      })
+      .filter((x): x is { ticker: string; pct: number } => x !== null);
+    const sorted = [...moves].sort((a, b) => b.pct - a.pct);
+    const best = sorted[0] ?? null;
+    const worst = sorted.length > 1 ? sorted[sorted.length - 1] : null;
+    const newThisWeek = p.positions.filter(isNewThisWeek).map((pos) => pos.ticker);
+    const tradeCount = weeklyTrades.filter((t) => t.playerId === p.id).length;
+    return { playerId: p.id, name: p.name, best, worst, newThisWeek, tradeCount };
+  });
+
+  const allMoves = perPlayer.flatMap((ph) => {
+    const picks: Array<{ ticker: string; pct: number; player: string }> = [];
+    if (ph.best) picks.push({ ...ph.best, player: ph.name });
+    if (ph.worst) picks.push({ ...ph.worst, player: ph.name });
+    return picks;
+  });
+  const sortedAll = [...allMoves].sort((a, b) => b.pct - a.pct);
+  const contestTop = sortedAll[0] ?? null;
+  const contestBottom = sortedAll.length > 1 ? sortedAll[sortedAll.length - 1] : null;
+
+  return { contestTop, contestBottom, perPlayer };
+}
+
+function renderHighlightsForPrompt(h: WeeklyHighlights): string {
+  const lines: string[] = [];
+  if (h.contestTop) lines.push(`Contest top mover: ${h.contestTop.ticker} ${formatPercent(h.contestTop.pct)} (held by ${h.contestTop.player})`);
+  if (h.contestBottom && h.contestBottom.ticker !== h.contestTop?.ticker) {
+    lines.push(`Contest bottom mover: ${h.contestBottom.ticker} ${formatPercent(h.contestBottom.pct)} (held by ${h.contestBottom.player})`);
+  }
+  h.perPlayer.forEach((ph) => {
+    const parts: string[] = [];
+    if (ph.best) parts.push(`best mover ${ph.best.ticker} ${formatPercent(ph.best.pct)}`);
+    if (ph.worst && ph.worst.ticker !== ph.best?.ticker) {
+      parts.push(`worst mover ${ph.worst.ticker} ${formatPercent(ph.worst.pct)}`);
+    }
+    if (ph.newThisWeek.length > 0) parts.push(`new this week: ${ph.newThisWeek.join(", ")}`);
+    parts.push(`${ph.tradeCount} trade${ph.tradeCount === 1 ? "" : "s"}`);
+    lines.push(`${ph.name}: ${parts.join("; ")}`);
+  });
+  return lines.join("\n");
+}
+
+export function renderHighlightsHtml(h: WeeklyHighlights): string {
+  const fmtMove = (m: { ticker: string; pct: number; player?: string }) =>
+    `<strong>${m.ticker}</strong> ${formatPercent(m.pct)}${m.player ? ` <span style="color: #6B7280;">(${m.player})</span>` : ""}`;
+  const contestLines: string[] = [];
+  if (h.contestTop) contestLines.push(`<div style="margin: 4px 0;"><span style="color: #6B7280;">Top mover:</span> ${fmtMove(h.contestTop)}</div>`);
+  if (h.contestBottom && h.contestBottom.ticker !== h.contestTop?.ticker) {
+    contestLines.push(`<div style="margin: 4px 0;"><span style="color: #6B7280;">Laggard:</span> ${fmtMove(h.contestBottom)}</div>`);
+  }
+  const playerLines = h.perPlayer.map((ph) => {
+    const parts: string[] = [];
+    if (ph.best) parts.push(`best ${fmtMove(ph.best)}`);
+    if (ph.worst && ph.worst.ticker !== ph.best?.ticker) parts.push(`worst ${fmtMove(ph.worst)}`);
+    if (ph.newThisWeek.length > 0) parts.push(`new: <strong>${ph.newThisWeek.join(", ")}</strong>`);
+    parts.push(`${ph.tradeCount} trade${ph.tradeCount === 1 ? "" : "s"}`);
+    return `<div style="margin: 6px 0; font-size: 13px;"><strong style="color: #111827;">${ph.name}:</strong> <span style="color: #4B5563;">${parts.join(" · ")}</span></div>`;
+  }).join("");
+  return `<div style="padding: 20px 24px; border-bottom: 1px solid #E5E7EB; background: #FAFAFA;">
+    <h2 style="margin: 0 0 12px 0; font-size: 14px; font-weight: 700; color: #111827; text-transform: uppercase; letter-spacing: 0.05em;">Weekly Highlights</h2>
+    <div style="font-size: 14px; color: #111827; margin-bottom: 10px;">${contestLines.join("")}</div>
+    <div>${playerLines}</div>
+  </div>`;
+}
+
 export function buildCommentaryPrompt(data: WeeklyReportData, marketContext?: string): string {
   const { leaderboard, weeklyTrades, weekDeltas, players, currentPrices, priceHistory, trades, reportDate } = data;
 
@@ -166,9 +278,16 @@ export function buildCommentaryPrompt(data: WeeklyReportData, marketContext?: st
   oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
   const cutoffDate = formatLocalYMD(oneWeekAgo);
 
+  // A position is "new this week" if the player did not hold any shares of
+  // it at the start of the week — in that case the ticker's 7-day price
+  // change is NOT this player's position return and should be excluded.
+  const isPositionNewThisWeek = (pos: { ticker: string; trades: Trade[] }) =>
+    pos.trades.length > 0 && pos.trades.every((t) => t.date >= cutoffDate);
+
   // Per-player, per-position weekly % price change (used twice below).
   const weeklyMovesByPlayer = leaderboard.map((p) => {
     const moves = p.positions
+      .filter((pos) => !isPositionNewThisWeek(pos))
       .map((pos) => {
         const curPrice = getCurrentPrice(pos.ticker, currentPrices, trades);
         const weekAgoPrice = getPriceAtDate(pos.ticker, cutoffDate, priceHistory);
@@ -192,14 +311,21 @@ export function buildCommentaryPrompt(data: WeeklyReportData, marketContext?: st
           const currentValue = pos.shares * curPrice;
           const gain = currentValue - deployed;
           const gainPct = deployed !== 0 ? (gain / deployed) * 100 : 0;
-          // Weekly price change from historical prices
-          const weekAgoPrice = getPriceAtDate(pos.ticker, cutoffDate, priceHistory);
-          const weekPriceChange = weekAgoPrice && weekAgoPrice > 0
-            ? ((curPrice - weekAgoPrice) / weekAgoPrice) * 100
-            : null;
-          const weekStr = weekPriceChange !== null
-            ? `, ${weekPriceChange >= 0 ? "+" : ""}${formatPercent(weekPriceChange)} this week`
-            : "";
+          // Weekly price change — ONLY for positions held at week-start.
+          // New-this-week positions get no "% this week" because the ticker's
+          // 7-day move is not the player's position return.
+          let weekStr = "";
+          if (isPositionNewThisWeek(pos)) {
+            weekStr = `, NEW THIS WEEK (no weekly return)`;
+          } else {
+            const weekAgoPrice = getPriceAtDate(pos.ticker, cutoffDate, priceHistory);
+            const weekPriceChange = weekAgoPrice && weekAgoPrice > 0
+              ? ((curPrice - weekAgoPrice) / weekAgoPrice) * 100
+              : null;
+            if (weekPriceChange !== null) {
+              weekStr = `, ${weekPriceChange >= 0 ? "+" : ""}${formatPercent(weekPriceChange)} this week`;
+            }
+          }
           return `${pos.ticker}: ${pos.shares} shares, ${formatCurrency(deployed)} deployed, now worth ${formatCurrency(currentValue)} (${gain >= 0 ? "+" : ""}${formatPercent(gainPct)} total${weekStr})`;
         })
         .join("; ");
@@ -217,7 +343,7 @@ export function buildCommentaryPrompt(data: WeeklyReportData, marketContext?: st
   // Pre-ranked biggest weekly movers per player so the AI doesn't have to
   // sort the position list itself (it was getting this wrong).
   const fmtMove = (m: { ticker: string; pct: number }) =>
-    `${m.ticker} ${m.pct >= 0 ? "+" : ""}${formatPercent(m.pct)}`;
+    `${m.ticker} ${formatPercent(m.pct)}`;
   const weeklyMoversSummary = weeklyMovesByPlayer
     .map(({ player, moves }) => {
       if (moves.length === 0) return `${player.name}: no weekly price data available`;
@@ -301,54 +427,51 @@ export function buildCommentaryPrompt(data: WeeklyReportData, marketContext?: st
           .join("\n")
       : "No trades this week.";
 
-  const allTickers = [
-    ...new Set(
-      leaderboard.flatMap((p) => p.positions.map((pos) => pos.ticker))
-    ),
-  ];
+  const highlights = buildWeeklyHighlights(data);
+  const highlightsText = renderHighlightsForPrompt(highlights);
 
-  return `You are a portfolio analyst writing a weekly investor letter for a family stock picking contest between three participants: Daddy, Eli, and Yitzi. Each started with $100,000 in virtual capital.
+  return `You are a portfolio analyst writing the narrative section of a weekly investor letter for a family stock picking contest between three participants: Daddy, Eli, and Yitzi. Each started with $100,000 in virtual capital. Today's report date is ${reportDate}.
 
-Write 2-3 short paragraphs (150-200 words) covering:
-1. Performance summary: who leads, by how much, and week-over-week changes. State the numbers plainly.
-2. Activity: what was bought or sold this week and the rationale behind each move, if apparent.
-3. Holdings review: how the current positions (${allTickers.join(", ") || "none yet"}) performed. Flag anything that moved more than a few percent.
+YOUR SCOPE IS INTENTIONALLY NARROW. All rankings, dollar amounts, percentages, and biggest-mover attributions are ALREADY rendered deterministically above your commentary in the email. The reader will see those facts separately. Your job is ONLY:
 
-TONE: Dry, confident, matter-of-fact. Think Buffett's shareholder letters -- plain English, short sentences, no jargon. Occasional dry wit is fine. You can be wry about poor decisions or large cash positions, but don't editorialize excessively. Let the numbers speak. Never flatter anyone.
+1. Market context — in one short paragraph (2-4 sentences), tie the week's activity to the broader market narrative using the MARKET CONTEXT below if provided. If no market context is available, skip this paragraph entirely.
+2. Activity rationale — in one short paragraph (2-4 sentences), describe what was bought or sold this week and the likely reasoning. Each trade in "Trades this week" must be addressed by name or via a deliberate grouping (e.g., "Eli made two adds and a trim on the 21st"). Do not silently skip any trade.
 
-EXAMPLE:
-"The portfolio returned +2.3% this week, bringing Daddy's total to $102,300. The gain came from his AAPL position, which added $1,800 after a strong earnings print. He remains fully allocated across five names.
+HARD RULES — violations will be flagged:
+- DO NOT quote any dollar amount. Not a position size, not a realized P&L, not a total value. No "$18,203", no "$100,000", no "$3,896 gain" — none.
+- DO NOT quote any percentage. Not weekly, not total, not cost-basis. No "+20.50%", no "13.45%", no "-6.66%".
+- DO NOT assert rankings or name the "biggest gainer/laggard". That's rendered above your commentary already.
+- DO NOT list standings.
+- Refer to tickers by name only (INTC, HOOD, etc.).
+- Do NOT use the word "week" plus a percentage. Do NOT describe the portfolio's total move in dollar or percent terms.
 
-Eli opened a GOOG position at $180, putting $18,000 to work from his $82,000 cash reserve. Time will tell. Yitzi sits at $100,000 in cash, having made no trades since the contest began. We note this without further comment."
+PARTIAL vs FULL CLOSE: respect the annotation on each trade. "PARTIAL TRIM (position: N -> M remaining)" means the position is NOT closed. "FULL CLOSE" means exited. Never describe a partial as a full exit.
 
-STRICT RULES:
-- Use specific numbers from the data (dollar amounts, percentages, share counts)
-- Position size = total dollars deployed, NOT per-share price. A 100-share position at $50/share ($5,000 deployed) is smaller than a 10-share position at $1,000/share ($10,000 deployed). The "deployed" amounts in the data are authoritative.
-- CRITICAL: "% total" is the gain since purchase. "% this week" is the actual price movement over the past 7 days. When discussing weekly performance, ONLY use the "this week" numbers. Never present total return as a weekly move.
-- SCOPE: "This week" is the window from last Friday's market close (4:00 PM ET) through this Friday's market close. Only reference trades in the "Trades this week" list below. Do NOT invent or recall trades from prior weeks — any ticker that appears only in a Positions line (not in the Trades list) is a pre-existing holding, not a recent trade.
-- BIGGEST WEEKLY MOVER: when naming a player's best- or worst-performing position of the week, use the pre-ranked values in the "Biggest weekly moves" section. Do not eyeball the standings list.
-- PARTIAL vs FULL CLOSE: respect the annotation on each sell. "partial trim, N shares still held" means the position is NOT closed. "full close" means exited. Never describe a partial as a full exit.
-- ACTIVITY COVERAGE: every trade in "Trades this week" must be addressed — either by name or via a deliberate grouping (e.g., "Yitzi made two trims and two adds on the 10th"). Do not silently skip any.
-- Do NOT use any of these words/phrases: ${BANNED_WORDS.map((w) => `"${w}"`).join(", ")}
-- Never use the "it's not X, it's Y" rhetorical construction
-- No flattery, no superlatives, no glazing -- just state what happened
-- NEVER claim a ticker is held by all players or use phrases like "across all portfolios" / "across all three" / "every player" unless the ticker literally appears in all three players' Positions lists above. If only two players hold it, name them explicitly ("both Daddy and Eli hold HYDTF"). If only one holds it, attribute to that player only.
-- POSITION COUNTS: the standings list shows holdings as of the report date (AFTER all trades this week). When describing a trim, take the "remaining" count from the trade annotation (which shows "position: N shares -> M remaining"). Do NOT subtract sold shares from the standings number — the standings already reflect the post-trade total.
-- Keep it under 200 words
+CROSS-PORTFOLIO CLAIMS: never say a ticker is held "across all portfolios" / "by every player" unless it literally is. If two hold it, name them. If one, attribute to that one.
 
-Current standings as of ${reportDate}:
-${standingsSummary}
+NEW THIS WEEK: Any position annotated "NEW THIS WEEK" was opened this week. Do NOT assign it a weekly move — the stock's 7-day price change is not this player's return on a position they didn't hold. You may mention that it was opened, at what avg cost (already in deployed amount — but do not restate the dollar amount; just describe it as "opened a HOOD position" or "started a new HOOD stake").
 
-Biggest weekly moves per player (pre-ranked — use these verbatim):
-${weeklyMoversSummary}
+TONE: Dry, confident, matter-of-fact. Think Buffett's shareholder letters — plain English, short sentences, no jargon. Occasional dry wit about poor decisions is fine. Never flatter anyone.
+
+BANNED: do not use these words/phrases: ${BANNED_WORDS.map((w) => `"${w}"`).join(", ")}. Never use "it's not X, it's Y" constructions. No glazing.
+
+LENGTH: strictly 2 paragraphs, each 2-4 sentences. Do not write a "performance summary" — that's above your commentary already.
+
+EXAMPLE (good — notice zero numbers, focus on WHY):
+"Semiconductor strength defined the week, with the SOX index up strongly on renewed AI-capex guidance from hyperscalers. That lifted INTC across the portfolios that held it, more than offsetting softer reads from the small-cap consumer-facing names.
+
+Eli was the most active, adding to four existing positions in the morning session and trimming HYDTF on Friday for a realized gain. Yitzi rotated out of CRCL at a loss and built a fresh HOOD stake in two tranches, trimming INTC later in the week to free up capital. Daddy stood pat, letting his existing holdings do the work."
+
+REFERENCE DATA YOU MAY USE (for rationale narrative only — DO NOT quote numbers):
 
 Trades this week:
-${recentTradesSummary}${marketContext ? `
+${recentTradesSummary}
+
+Weekly highlights (already in the email above your commentary — DO NOT restate):
+${highlightsText}${marketContext ? `
 
 MARKET CONTEXT (from Vital Knowledge newsletter digests this week):
-${marketContext}
-
-Use the market context to add color when relevant (e.g., "AAPL's +2% outpaced a rough week for tech"). Weave it in naturally — 1-2 sentences max. Do NOT summarize the newsletter or quote it directly. Contest data is still the primary focus.` : ""}`;
+${marketContext}` : ""}`;
 }
 
 export async function generateCommentary(
@@ -360,11 +483,25 @@ export async function generateCommentary(
   const client = new Anthropic({ apiKey: anthropicApiKey });
   const message = await client.messages.create({
     model,
-    max_tokens: 500,
+    max_tokens: 1500,
     messages: [{ role: "user", content: buildCommentaryPrompt(data, marketContext) }],
   });
   const block = message.content[0];
-  return block.type === "text" ? block.text : "";
+  const text = block.type === "text" ? block.text : "";
+  logNumericDrift(text);
+  return text;
+}
+
+// After the prompt rewrite, the AI is forbidden from quoting numbers — those
+// come from the deterministic Weekly Highlights block. If it slips, surface
+// the offending snippets in the server log so future drift is visible.
+function logNumericDrift(text: string): void {
+  const dollarMatches = text.match(/\$\s?\d[\d,]*(?:\.\d+)?/g) ?? [];
+  const percentMatches = text.match(/[-+]?\d+(?:\.\d+)?\s?%/g) ?? [];
+  if (dollarMatches.length === 0 && percentMatches.length === 0) return;
+  console.warn(
+    `[Commentary] AI commentary contains numeric claims it should not have quoted. dollars=${JSON.stringify(dollarMatches.slice(0, 5))} percents=${JSON.stringify(percentMatches.slice(0, 5))}`
+  );
 }
 
 // ---------- HTML Email Template ----------
@@ -388,6 +525,7 @@ export function buildEmailHtml(
   const { leaderboard, weeklyTrades, weekDeltas, players, trades, currentPrices, reportDate } = data;
 
   const commentaryHtml = formatCommentary(commentary);
+  const highlightsHtml = renderHighlightsHtml(buildWeeklyHighlights(data));
 
   const rankColors = ["#EAB308", "#9CA3AF", "#D97706", "#D1D5DB"];
 
@@ -553,7 +691,10 @@ export function buildEmailHtml(
 
     <div style="background: white; border-radius: 0 0 12px 12px; border: 1px solid #E5E7EB; border-top: none;">
 
-      <!-- Commentary -->
+      <!-- Weekly Highlights (deterministic) -->
+      ${highlightsHtml}
+
+      <!-- Commentary (AI narrative) -->
       <div id="commentary" style="padding: 24px; border-bottom: 1px solid #E5E7EB; border-left: 4px solid #2563EB;">
         ${commentaryHtml}
       </div>
