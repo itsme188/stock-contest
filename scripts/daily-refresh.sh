@@ -18,6 +18,20 @@ log() {
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
 }
 
+# Self-check: warn if the previous run is suspiciously old. 72h covers a normal
+# Fri 16:20 -> Mon 9:31 weekend gap (~65h) and a one-off weekday miss without
+# false-alarming, while still catching a launchd-unloaded / machine-off-for-days
+# silent failure.
+if [ -f "$LOG_FILE" ]; then
+  LAST_RUN=$(stat -f %m "$LOG_FILE" 2>/dev/null || echo 0)
+  NOW=$(date +%s)
+  GAP=$(( NOW - LAST_RUN ))
+  if [ "$GAP" -gt 259200 ]; then
+    HOURS=$(( GAP / 3600 ))
+    osascript -e "display notification \"Last daily-refresh was ${HOURS}h ago. Check: launchctl list com.stockcontest.daily-refresh\" with title \"Stock Contest\" subtitle \"Daily refresh was silent\"" 2>/dev/null || true
+  fi
+fi
+
 log "=== Daily refresh started ==="
 
 if ! curl -sf --max-time "$HEALTH_TIMEOUT" "${BASE_URL}/api/health" > /dev/null 2>&1; then
