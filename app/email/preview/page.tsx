@@ -16,6 +16,7 @@ export default function EmailPreview() {
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const [vk, setVk] = useState<VkStatus | null>(null);
+  const [iframeLoaded, setIframeLoaded] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
   const edited = commentary !== originalCommentary && originalCommentary !== "";
@@ -24,6 +25,7 @@ export default function EmailPreview() {
     setLoading(true);
     setError("");
     setStatus("");
+    setIframeLoaded(false);
     try {
       const res = await fetch("/api/email/preview", { method: "POST" });
       const data = await res.json();
@@ -84,6 +86,11 @@ export default function EmailPreview() {
 
     const commentaryDiv = doc.getElementById("commentary");
     if (!commentaryDiv) return;
+
+    // Only mark loaded once the editable handlers are wired below — that's
+    // when "Send" is genuinely safe (cloned-DOM read at line ~54 will see
+    // the post-Regenerate content, not a transitional state).
+    setIframeLoaded(true);
 
     // Make editable
     commentaryDiv.contentEditable = "true";
@@ -173,7 +180,8 @@ export default function EmailPreview() {
             )}
             <button
               onClick={sendEmail}
-              disabled={sending || loading || !html}
+              disabled={sending || loading || !html || !iframeLoaded}
+              title={!iframeLoaded && html ? "Waiting for preview to finish rendering…" : undefined}
               className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm font-medium"
             >
               {sending ? "Sending..." : "Send Email"}

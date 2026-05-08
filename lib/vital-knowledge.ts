@@ -1,8 +1,14 @@
 import { ImapFlow, type MessageStructureObject } from "imapflow";
 
 const VK_SENDER = "updates@vitalknowledge.net";
-const MAX_EMAILS = 5;
-const MAX_CHARS_PER_EMAIL = 3000;
+// User feedback (2026-05-08): the daily-digest emails dilute the market
+// context — the AI ends up emphasizing whatever happens to be in the latest
+// note (e.g. Friday's jobs report) rather than the dominant theme of the
+// week. The Friday "Vital Talking Points Recap" email is the curated weekly
+// summary; that's what the AI should see.
+const VK_SUBJECT_PATTERN = "Vital Talking Points Recap";
+const MAX_EMAILS = 1;
+const MAX_CHARS_PER_EMAIL = 8000;
 const MAX_TOTAL_CHARS = 8000;
 
 // ---------- Helpers ----------
@@ -40,13 +46,21 @@ export function findPart(
 // ---------- Main ----------
 
 /**
- * Fetch recent Vital Knowledge digest emails from Gmail via IMAP.
- * Returns formatted market context string, or "" on any failure.
+ * Fetch the most recent Vital Knowledge weekly recap email from Gmail via
+ * IMAP. We previously aggregated all 5 daily VK emails from the week, but
+ * the AI ended up emphasizing whatever was in the latest note (e.g. the
+ * Friday jobs report) rather than the dominant theme of the week. The
+ * Friday "Vital Talking Points Recap" subject is the curated weekly summary.
+ *
+ * Lookback default of 8 days covers the typical case (recap arrives Friday
+ * morning) plus a 1-day buffer for late delivery.
+ *
+ * Returns formatted market context string, or "" on any failure / no match.
  */
 export async function fetchVitalKnowledge(
   gmailAddress: string,
   gmailAppPassword: string,
-  lookbackDays: number = 7
+  lookbackDays: number = 8
 ): Promise<string> {
   if (!gmailAddress || !gmailAppPassword) return "";
 
@@ -67,10 +81,15 @@ export async function fetchVitalKnowledge(
       const since = new Date();
       since.setDate(since.getDate() - lookbackDays);
 
-      const uids = await client.search({ from: VK_SENDER, since }, { uid: true });
+      // Filter by subject so we get only the Friday weekly recap, not the
+      // 5 daily morning notes from the same week.
+      const uids = await client.search(
+        { from: VK_SENDER, since, subject: VK_SUBJECT_PATTERN },
+        { uid: true }
+      );
       if (!uids || uids.length === 0) return "";
 
-      // Most recent N emails
+      // Most recent N emails (typically just the latest recap)
       const recentUids = uids.slice(-MAX_EMAILS);
 
       const emails: { date: Date; subject: string; text: string }[] = [];

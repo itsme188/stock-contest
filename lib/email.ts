@@ -181,6 +181,12 @@ export interface WeeklyHighlights {
   contestTop: { ticker: string; pct: number; player: string } | null;
   contestBottom: { ticker: string; pct: number; player: string } | null;
   perPlayer: PlayerHighlight[];
+  // Tickers excluded from rankings because their weekly price-change couldn't
+  // be computed (missing priceHistory entry for the week-ago cutoff date).
+  // Surfaced to the caller so a partial-data send can be flagged in the audit
+  // log and trigger a failure-alert email rather than silently shipping
+  // incomplete highlights.
+  warnings: string[];
 }
 
 export function buildWeeklyHighlights(data: WeeklyReportData): WeeklyHighlights {
@@ -194,17 +200,21 @@ export function buildWeeklyHighlights(data: WeeklyReportData): WeeklyHighlights 
   const isNewThisWeek = (pos: { ticker: string; trades: Trade[] }) =>
     pos.trades.length > 0 && pos.trades.every((t) => t.date >= cutoffDate);
 
+  const warnings: string[] = [];
   const perPlayer: PlayerHighlight[] = leaderboard.map((p) => {
     const moves = p.positions
       .filter((pos) => !isNewThisWeek(pos))
       .map((pos) => {
         const curPrice = getCurrentPrice(pos.ticker, currentPrices, trades);
         const weekAgoPrice = getPriceAtDate(pos.ticker, cutoffDate, priceHistory);
-        const pct =
-          weekAgoPrice && weekAgoPrice > 0
-            ? ((curPrice - weekAgoPrice) / weekAgoPrice) * 100
-            : null;
-        return pct !== null ? { ticker: pos.ticker, pct } : null;
+        if (!weekAgoPrice || weekAgoPrice <= 0) {
+          warnings.push(
+            `${pos.ticker} (${p.name}): excluded from highlights — no priceHistory for ${cutoffDate}`
+          );
+          return null;
+        }
+        const pct = ((curPrice - weekAgoPrice) / weekAgoPrice) * 100;
+        return { ticker: pos.ticker, pct };
       })
       .filter((x): x is { ticker: string; pct: number } => x !== null);
     const sorted = [...moves].sort((a, b) => b.pct - a.pct);
@@ -225,46 +235,32 @@ export function buildWeeklyHighlights(data: WeeklyReportData): WeeklyHighlights 
   const contestTop = sortedAll[0] ?? null;
   const contestBottom = sortedAll.length > 1 ? sortedAll[sortedAll.length - 1] : null;
 
-  return { contestTop, contestBottom, perPlayer };
-}
-
-function renderHighlightsForPrompt(h: WeeklyHighlights): string {
-  const lines: string[] = [];
-  if (h.contestTop) lines.push(`Contest top mover: ${h.contestTop.ticker} ${formatPercent(h.contestTop.pct)} (held by ${h.contestTop.player})`);
-  if (h.contestBottom && h.contestBottom.ticker !== h.contestTop?.ticker) {
-    lines.push(`Contest bottom mover: ${h.contestBottom.ticker} ${formatPercent(h.contestBottom.pct)} (held by ${h.contestBottom.player})`);
-  }
-  h.perPlayer.forEach((ph) => {
-    const parts: string[] = [];
-    if (ph.best) parts.push(`best mover ${ph.best.ticker} ${formatPercent(ph.best.pct)}`);
-    if (ph.worst && ph.worst.ticker !== ph.best?.ticker) {
-      parts.push(`worst mover ${ph.worst.ticker} ${formatPercent(ph.worst.pct)}`);
-    }
-    if (ph.newThisWeek.length > 0) parts.push(`new this week: ${ph.newThisWeek.join(", ")}`);
-    parts.push(`${ph.tradeCount} trade${ph.tradeCount === 1 ? "" : "s"}`);
-    lines.push(`${ph.name}: ${parts.join("; ")}`);
-  });
-  return lines.join("\n");
+  return { contestTop, contestBottom, perPlayer, warnings };
 }
 
 export function renderHighlightsHtml(h: WeeklyHighlights): string {
   const fmtMove = (m: { ticker: string; pct: number; player?: string }) =>
     `<strong>${m.ticker}</strong> ${formatPercent(m.pct)}${m.player ? ` <span style="color: #6B7280;">(${m.player})</span>` : ""}`;
+  // Labels say "7-day move" rather than "top mover" / "best" so the reader
+  // (and any downstream LLM eyeballing it) doesn't mistake a price-change
+  // ranking for a "best trade" claim. A position opened mid-week is
+  // excluded from this ranking precisely because the ticker's 7-day move is
+  // not the player's return on that position.
   const contestLines: string[] = [];
-  if (h.contestTop) contestLines.push(`<div style="margin: 4px 0;"><span style="color: #6B7280;">Top mover:</span> ${fmtMove(h.contestTop)}</div>`);
+  if (h.contestTop) contestLines.push(`<div style="margin: 4px 0;"><span style="color: #6B7280;">Best 7-day move:</span> ${fmtMove(h.contestTop)}</div>`);
   if (h.contestBottom && h.contestBottom.ticker !== h.contestTop?.ticker) {
-    contestLines.push(`<div style="margin: 4px 0;"><span style="color: #6B7280;">Laggard:</span> ${fmtMove(h.contestBottom)}</div>`);
+    contestLines.push(`<div style="margin: 4px 0;"><span style="color: #6B7280;">Worst 7-day move:</span> ${fmtMove(h.contestBottom)}</div>`);
   }
   const playerLines = h.perPlayer.map((ph) => {
     const parts: string[] = [];
-    if (ph.best) parts.push(`best ${fmtMove(ph.best)}`);
-    if (ph.worst && ph.worst.ticker !== ph.best?.ticker) parts.push(`worst ${fmtMove(ph.worst)}`);
+    if (ph.best) parts.push(`best 7-day ${fmtMove(ph.best)}`);
+    if (ph.worst && ph.worst.ticker !== ph.best?.ticker) parts.push(`worst 7-day ${fmtMove(ph.worst)}`);
     if (ph.newThisWeek.length > 0) parts.push(`new: <strong>${ph.newThisWeek.join(", ")}</strong>`);
     parts.push(`${ph.tradeCount} trade${ph.tradeCount === 1 ? "" : "s"}`);
     return `<div style="margin: 6px 0; font-size: 13px;"><strong style="color: #111827;">${ph.name}:</strong> <span style="color: #4B5563;">${parts.join(" · ")}</span></div>`;
   }).join("");
   return `<div style="padding: 20px 24px; border-bottom: 1px solid #E5E7EB; background: #FAFAFA;">
-    <h2 style="margin: 0 0 12px 0; font-size: 14px; font-weight: 700; color: #111827; text-transform: uppercase; letter-spacing: 0.05em;">Weekly Highlights</h2>
+    <h2 style="margin: 0 0 12px 0; font-size: 14px; font-weight: 700; color: #111827; text-transform: uppercase; letter-spacing: 0.05em;">7-Day Price Moves (open positions only)</h2>
     <div style="font-size: 14px; color: #111827; margin-bottom: 10px;">${contestLines.join("")}</div>
     <div>${playerLines}</div>
   </div>`;
@@ -283,23 +279,6 @@ export function buildCommentaryPrompt(data: WeeklyReportData, marketContext?: st
   // change is NOT this player's position return and should be excluded.
   const isPositionNewThisWeek = (pos: { ticker: string; trades: Trade[] }) =>
     pos.trades.length > 0 && pos.trades.every((t) => t.date >= cutoffDate);
-
-  // Per-player, per-position weekly % price change (used twice below).
-  const weeklyMovesByPlayer = leaderboard.map((p) => {
-    const moves = p.positions
-      .filter((pos) => !isPositionNewThisWeek(pos))
-      .map((pos) => {
-        const curPrice = getCurrentPrice(pos.ticker, currentPrices, trades);
-        const weekAgoPrice = getPriceAtDate(pos.ticker, cutoffDate, priceHistory);
-        const pct =
-          weekAgoPrice && weekAgoPrice > 0
-            ? ((curPrice - weekAgoPrice) / weekAgoPrice) * 100
-            : null;
-        return pct !== null ? { ticker: pos.ticker, pct } : null;
-      })
-      .filter((x): x is { ticker: string; pct: number } => x !== null);
-    return { player: p, moves };
-  });
 
   const standingsSummary = leaderboard
     .map((p, i) => {
@@ -340,23 +319,29 @@ export function buildCommentaryPrompt(data: WeeklyReportData, marketContext?: st
     })
     .join("\n");
 
-  // Pre-ranked biggest weekly movers per player so the AI doesn't have to
-  // sort the position list itself (it was getting this wrong).
-  const fmtMove = (m: { ticker: string; pct: number }) =>
-    `${m.ticker} ${formatPercent(m.pct)}`;
-  const weeklyMoversSummary = weeklyMovesByPlayer
-    .map(({ player, moves }) => {
-      if (moves.length === 0) return `${player.name}: no weekly price data available`;
-      const sorted = [...moves].sort((a, b) => b.pct - a.pct);
-      const best = sorted[0];
-      const worst = sorted[sorted.length - 1];
-      const parts = [`biggest gainer ${fmtMove(best)}`];
-      if (sorted.length > 1 && worst.ticker !== best.ticker) {
-        parts.push(`biggest laggard ${fmtMove(worst)}`);
-      }
-      return `${player.name}: ${parts.join(", ")}`;
-    })
-    .join("\n");
+  // Pre-compute which players hold each ticker so the AI doesn't have to
+  // derive cross-portfolio attribution from the standings table (it was
+  // getting this wrong — claimed LFMD was held "across all portfolios" when
+  // only two of three held it).
+  const tickerToHolders = new Map<string, string[]>();
+  leaderboard.forEach((p) => {
+    p.positions.forEach((pos) => {
+      const list = tickerToHolders.get(pos.ticker) ?? [];
+      list.push(p.name);
+      tickerToHolders.set(pos.ticker, list);
+    });
+  });
+  const crossHoldingsSummary =
+    tickerToHolders.size > 0
+      ? Array.from(tickerToHolders.entries())
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([ticker, holders]) =>
+            holders.length === 1
+              ? `- ${ticker}: held by ${holders[0]} only`
+              : `- ${ticker}: held by ${holders.join(", ")}`
+          )
+          .join("\n")
+      : "- (no open positions)";
 
   // Enrich weekly trades with partial/full-close status and realized P&L so
   // the AI doesn't mistake a trim for a full exit (Eli's WLTH sell on Apr 17
@@ -414,21 +399,115 @@ export function buildCommentaryPrompt(data: WeeklyReportData, marketContext?: st
     }
   }
 
-  const recentTradesSummary =
-    weeklyTrades.length > 0
-      ? weeklyTrades
-          .map((t) => {
-            const player = players.find((p) => p.id === t.playerId);
-            const total = t.shares * t.price;
-            const annotation = tradeAnnotations.get(t.id);
-            const annStr = annotation ? ` — ${annotation}` : "";
-            return `${t.date}: ${player?.name} ${t.type.toUpperCase()} ${t.shares} ${t.ticker} @ ${formatCurrency(t.price)} (${formatCurrency(total)} total)${annStr}`;
-          })
-          .join("\n")
-      : "No trades this week.";
+  // Per-player → per-ticker trade blocks (Phase 6+X, 2026-05-08).
+  //
+  // Earlier iterations had two failure modes:
+  //   1. Flat list intermingled players → wrong-attribution ("Eli sold INTC"
+  //      when only Yitzi did).
+  //   2. Per-trade list grouped by player only → AI couldn't summarize
+  //      counts or days correctly ("three tranches on May 6" when it was
+  //      two; "APP opened Friday" when it was Thursday).
+  //
+  // Per-ticker grouping with a header summary (counts + intent +
+  // partial/full-close indicator) gives the AI structure to copy verbatim:
+  // the count is in the header, days are explicit on each line, and the
+  // "FULL CLOSE" annotation is on the row that closes. The AI doesn't have
+  // to derive anything.
+  //
+  // Day-of-week is pre-computed (`Wed` not "Wednesday") because the AI gets
+  // calendar arithmetic wrong (claimed 5/6/2026 was a Tuesday when it's a
+  // Wednesday). Same lesson as the rest of the codebase.
+  const dayOfWeekShort = (yyyymmdd: string): string => {
+    const [y, m, d] = yyyymmdd.split("-").map(Number);
+    return new Date(Date.UTC(y, m - 1, d)).toLocaleString("en-US", {
+      weekday: "short",
+      timeZone: "UTC",
+    });
+  };
+  const recentTradesSummary = (() => {
+    if (weeklyTrades.length === 0) return "No trades this week.";
+    const blocks: string[] = [];
+    for (const player of players) {
+      const playerTrades = weeklyTrades.filter((t) => t.playerId === player.id);
+      if (playerTrades.length === 0) {
+        blocks.push(`${player.name.toUpperCase()} (0 trades this week)`);
+        continue;
+      }
 
-  const highlights = buildWeeklyHighlights(data);
-  const highlightsText = renderHighlightsForPrompt(highlights);
+      // Group player's trades by ticker.
+      const byTicker = new Map<string, Trade[]>();
+      for (const t of playerTrades) {
+        const list = byTicker.get(t.ticker) ?? [];
+        list.push(t);
+        byTicker.set(t.ticker, list);
+      }
+
+      const tickerBlocks: string[] = [];
+      for (const [ticker, tTrades] of byTicker) {
+        const buys = tTrades.filter((t) => t.type === "buy");
+        const sells = tTrades.filter((t) => t.type === "sell");
+        // Header summary: "2 sells, full exit" / "2 buys, adds to existing"
+        const direction =
+          buys.length > 0 && sells.length === 0
+            ? `${buys.length} buy${buys.length === 1 ? "" : "s"}`
+            : sells.length > 0 && buys.length === 0
+            ? `${sells.length} sell${sells.length === 1 ? "" : "s"}`
+            : `${buys.length} buy${buys.length === 1 ? "" : "s"} + ${sells.length} sell${sells.length === 1 ? "" : "s"}`;
+        // Detect full-close from annotations (already computed above).
+        const hasFullClose = tTrades.some((t) => {
+          const ann = tradeAnnotations.get(t.id);
+          return ann?.includes("FULL CLOSE");
+        });
+        const hasNewOpen = tTrades.some((t) => {
+          const ann = tradeAnnotations.get(t.id);
+          return ann === "new position";
+        });
+        const intentParts: string[] = [];
+        if (hasFullClose) intentParts.push("full exit");
+        if (hasNewOpen) intentParts.push("new position");
+        if (!hasFullClose && !hasNewOpen) {
+          if (sells.length > 0) intentParts.push("partial trims");
+          if (buys.length > 0) intentParts.push("adds to existing");
+        }
+        const header = `  ${ticker} (${direction}${intentParts.length > 0 ? ", " + intentParts.join(" + ") : ""}):`;
+
+        const rows = tTrades.map((t) => {
+          const annotation = tradeAnnotations.get(t.id);
+          const annStr = annotation ? ` — ${annotation}` : "";
+          return `    - ${t.date} (${dayOfWeekShort(t.date)}): ${t.type.toUpperCase()} ${t.shares} @ ${formatCurrency(t.price)}${annStr}`;
+        });
+
+        tickerBlocks.push([header, ...rows].join("\n"));
+      }
+
+      blocks.push(
+        `${player.name.toUpperCase()} (${playerTrades.length} trade${playerTrades.length === 1 ? "" : "s"}):\n${tickerBlocks.join("\n")}`
+      );
+    }
+    return blocks.join("\n\n");
+  })();
+
+  // Required-topics checklist. The AI's prose MUST mention every (player,
+  // ticker) tuple here at least once — coverage is enforced post-hoc by
+  // detectFactualViolations() and triggers regeneration if the prose drops
+  // a trade. Daddy's "(none)" entry is informational; if a player has no
+  // trades the AI may briefly mention they stood pat (or omit if no trades
+  // at all).
+  const requiredTopics = (() => {
+    if (weeklyTrades.length === 0) return "(no trades this week — write only the market-context paragraph)";
+    const lines: string[] = [];
+    for (const player of players) {
+      const tickers = Array.from(
+        new Set(weeklyTrades.filter((t) => t.playerId === player.id).map((t) => t.ticker))
+      ).sort();
+      if (tickers.length === 0) {
+        lines.push(`- ${player.name}: no trades (mention briefly, e.g. "Daddy stood pat")`);
+      } else {
+        lines.push(`- ${player.name}: ${tickers.join(", ")}`);
+      }
+    }
+    return lines.join("\n");
+  })();
 
   return `You are a portfolio analyst writing the narrative section of a weekly investor letter for a family stock picking contest between three participants: Daddy, Eli, and Yitzi. Each started with $100,000 in virtual capital. Today's report date is ${reportDate}.
 
@@ -440,68 +519,393 @@ YOUR SCOPE IS INTENTIONALLY NARROW. All rankings, dollar amounts, percentages, a
 HARD RULES — violations will be flagged:
 - DO NOT quote any dollar amount. Not a position size, not a realized P&L, not a total value. No "$18,203", no "$100,000", no "$3,896 gain" — none.
 - DO NOT quote any percentage. Not weekly, not total, not cost-basis. No "+20.50%", no "13.45%", no "-6.66%".
-- DO NOT assert rankings or name the "biggest gainer/laggard". That's rendered above your commentary already.
+- DO NOT name a "best trade", "best performer", "biggest winner/loser", or "biggest gainer/laggard". DO NOT use ranking language: no "standout", "top pick", "led the charge", "clear winner", "dominated", "crushed". The deterministic highlights block above the commentary handles all rankings; your prose should focus on RATIONALE (why a trade was made, what context drove it), not on naming winners or losers.
 - DO NOT list standings.
 - Refer to tickers by name only (INTC, HOOD, etc.).
 - Do NOT use the word "week" plus a percentage. Do NOT describe the portfolio's total move in dollar or percent terms.
 
 PARTIAL vs FULL CLOSE: respect the annotation on each trade. "PARTIAL TRIM (position: N -> M remaining)" means the position is NOT closed. "FULL CLOSE" means exited. Never describe a partial as a full exit.
 
-CROSS-PORTFOLIO CLAIMS: never say a ticker is held "across all portfolios" / "by every player" unless it literally is. If two hold it, name them. If one, attribute to that one.
+CROSS-PORTFOLIO CLAIMS: when mentioning which players hold a ticker, use the "Cross-portfolio holdings" list below verbatim. If only one player holds it, attribute to that one. If multiple hold it, name them. Never say "across all portfolios" / "by every player" unless that ticker is literally listed as held by all three.
 
-NEW THIS WEEK: Any position annotated "NEW THIS WEEK" was opened this week. Do NOT assign it a weekly move — the stock's 7-day price change is not this player's return on a position they didn't hold. You may mention that it was opened, at what avg cost (already in deployed amount — but do not restate the dollar amount; just describe it as "opened a HOOD position" or "started a new HOOD stake").
+NEW-THIS-WEEK POSITIONS — examples of correct phrasing:
+✓ "Yitzi opened a HOOD stake in two tranches."
+✓ "Eli initiated a new position in MDI.TO."
+✗ "Yitzi opened HOOD as semiconductor strength returned." (ties a new open to a market move — implies a return that wasn't earned over the week)
+✗ "Eli's new MDI.TO position has rallied since." (assigns a return to a position whose entry was mid-week — you don't have basis to compute it)
+A new open may be MENTIONED but its performance MUST NOT be characterized.
+
+EDGE CASES:
+- If "Trades this week" says "No trades this week.": write only the market-context paragraph; omit the activity paragraph entirely. Do not invent activity.
+- If only one trade occurred: address it specifically in 1-2 sentences within the activity paragraph; do not pad with generic narrative.
+
+ATTRIBUTION DISCIPLINE (violations cause automatic regeneration):
+- A player can ONLY be associated with the tickers in their block in "Trades this week" below. If you write "Eli ... INTC", Eli must have an INTC trade in this week's list. If you write "Both harvested INTC gains," BOTH players you're referring to must have INTC trades.
+- Every (player, ticker) pair listed under "MUST mention" must appear together in your prose — adjacent or in the same sentence. Skipping a trade (or grouping it away vaguely) counts as a coverage violation.
+- Do not invent tickers. Use only ticker symbols that appear in "Trades this week" or "Cross-portfolio holdings".
+
+DATES & DAYS-OF-WEEK: each trade row has a parenthetical day-of-week ("2026-05-06 (Wed)"). USE THE PARENTHETICAL VERBATIM if you want to name a day; do NOT compute days yourself. If you write "on Wednesday", it must match a (Wed) row in the data. Equivalent: "on May 6" is always safe.
 
 TONE: Dry, confident, matter-of-fact. Think Buffett's shareholder letters — plain English, short sentences, no jargon. Occasional dry wit about poor decisions is fine. Never flatter anyone.
 
 BANNED: do not use these words/phrases: ${BANNED_WORDS.map((w) => `"${w}"`).join(", ")}. Never use "it's not X, it's Y" constructions. No glazing.
 
-LENGTH: strictly 2 paragraphs, each 2-4 sentences. Do not write a "performance summary" — that's above your commentary already.
+LENGTH: strictly 2 paragraphs, each 2-4 sentences (or 1 paragraph if no trades — see EDGE CASES). Do not write a "performance summary" — that's above your commentary already.
 
-EXAMPLE (good — notice zero numbers, focus on WHY):
+EXAMPLE (good — notice zero numbers, no ranking language, focus on WHY):
 "Semiconductor strength defined the week, with the SOX index up strongly on renewed AI-capex guidance from hyperscalers. That lifted INTC across the portfolios that held it, more than offsetting softer reads from the small-cap consumer-facing names.
 
 Eli was the most active, adding to four existing positions in the morning session and trimming HYDTF on Friday for a realized gain. Yitzi rotated out of CRCL at a loss and built a fresh HOOD stake in two tranches, trimming INTC later in the week to free up capital. Daddy stood pat, letting his existing holdings do the work."
 
 REFERENCE DATA YOU MAY USE (for rationale narrative only — DO NOT quote numbers):
 
-Trades this week:
+MUST mention (every (player, ticker) below must appear together in your prose):
+${requiredTopics}
+
+Trades this week (grouped by player — only these players traded these tickers this week):
 ${recentTradesSummary}
 
-Weekly highlights (already in the email above your commentary — DO NOT restate):
-${highlightsText}${marketContext ? `
+Cross-portfolio holdings (use these verbatim for attribution):
+${crossHoldingsSummary}${marketContext ? `
 
 MARKET CONTEXT (from Vital Knowledge newsletter digests this week):
 ${marketContext}` : ""}`;
 }
 
+export interface ViolationReport {
+  numericViolations: number;
+  rankingViolations: number;
+  numericSnippets: string[];
+  rankingSnippets: string[];
+}
+
+// Phrases that indicate the AI is asserting a ranking ("X was the best trade",
+// "Y dominated the week"). The deterministic highlights block above the
+// commentary already shows the rankings; the AI's prose should focus on
+// rationale, not on naming winners and losers. Each pattern is matched
+// case-insensitively against the commentary text. Word boundaries on either
+// side prevent partial matches inside other words.
+const RANKING_PATTERNS: RegExp[] = [
+  /\bbest\s+(?:trade|performer|pick|mover|position|name|winner)\b/i,
+  /\bworst\s+(?:trade|performer|pick|mover|position|name|loser)\b/i,
+  /\bbiggest\s+(?:gainer|loser|winner|laggard|move|mover|trade)\b/i,
+  /\btop\s+(?:pick|performer|mover|trade|name)\b/i,
+  /\bclear\s+(?:winner|loser)\b/i,
+  /\bstandout\b/i,
+  /\bled\s+the\s+(?:charge|pack|way)\b/i,
+  /\bdominated\s+(?:the\s+week|the\s+portfolio|the\s+contest)\b/i,
+  /\b(?:crushed|outshone)\s+(?:the\s+others|the\s+rest|everyone|the\s+field)\b/i,
+];
+
+export function detectCommentaryViolations(text: string): ViolationReport {
+  const numericSnippets = [
+    ...(text.match(/\$\s?\d[\d,]*(?:\.\d+)?/g) ?? []),
+    ...(text.match(/[-+]?\d+(?:\.\d+)?\s?%/g) ?? []),
+  ];
+  const rankingSnippets: string[] = [];
+  for (const pattern of RANKING_PATTERNS) {
+    const matches = text.match(new RegExp(pattern.source, pattern.flags + (pattern.flags.includes("g") ? "" : "g")));
+    if (matches) rankingSnippets.push(...matches);
+  }
+  return {
+    numericViolations: numericSnippets.length,
+    rankingViolations: rankingSnippets.length,
+    numericSnippets,
+    rankingSnippets,
+  };
+}
+
+// ---------- Phase 6: Factual validator ----------
+//
+// `detectCommentaryViolations` (above) catches paraphrase patterns
+// ("standout", "$5,000", "+5%"). It does NOT catch factual hallucinations:
+// the AI claiming Eli sold INTC when only Yitzi did, the AI making up a
+// ticker that nobody trades, or the AI dropping a trade entirely. Those
+// are the errors that landed in the user's 2026-05-08 email.
+//
+// `detectFactualViolations` cross-checks the prose against the actual
+// trade log:
+//   - coverage:   every (player, ticker) tuple in weeklyTrades must
+//                 co-occur in the prose (player name AND ticker within
+//                 the same ~250-char window).
+//   - unknownTickers: any ALL-CAPS 2-5-letter token that looks like a
+//                 ticker but doesn't appear in the contest's known set
+//                 (current + historical) is flagged as a hallucination.
+//
+// Coverage failures retry; unknownTickers always retry.
+
+export interface FactualViolationReport {
+  missedTrades: Array<{ player: string; ticker: string }>;
+  unknownTickers: Array<{ ticker: string; quote: string }>;
+}
+
+// Common false-positive ALL-CAPS tokens that look like tickers but are
+// market/finance abbreviations. Add as needed.
+const TICKER_FALSE_POSITIVES = new Set([
+  "AI", "US", "EU", "ETF", "ET", "AH", "PT", "IPO", "CEO", "CFO", "GDP",
+  "PMI", "CPI", "PPI", "EPS", "NYSE", "NASDAQ", "SOX", "SPX", "DJIA", "WTI",
+  "AM", "PM", "HQ", "Q1", "Q2", "Q3", "Q4", "YTD", "YOY", "QOQ", "OK",
+  "FED", "FOMC", "BLS", "DOJ", "FTC", "SEC", "WSJ", "FT", "NYT", "I",
+  "NEW", "THIS", "WEEK", "ALL", "USD", "CAD", "GBP", "EUR", "JPY",
+]);
+
+export function detectFactualViolations(
+  text: string,
+  weeklyTrades: Trade[],
+  players: Player[],
+  knownTickers: Set<string>
+): FactualViolationReport {
+  // Coverage: each (player, ticker) tuple in weeklyTrades must appear
+  // together in the prose. Paragraph-level co-occurrence is the right
+  // granularity — a long paragraph like "Yitzi: trimmed X, bought Y, sold
+  // Z, added W on Friday" attributes everything to Yitzi as the established
+  // subject, even when individual tokens are 300+ chars apart. We also
+  // accept the looser sentence-level co-occurrence (player and ticker in
+  // the same sentence) for short prose.
+  const playerIdToName = new Map(players.map((p) => [p.id, p.name]));
+  const requiredPairs = new Map<string, { player: string; ticker: string }>();
+  for (const t of weeklyTrades) {
+    const playerName = playerIdToName.get(t.playerId);
+    if (!playerName) continue;
+    requiredPairs.set(`${playerName}|${t.ticker}`, { player: playerName, ticker: t.ticker });
+  }
+
+  // Split into paragraphs (and sentences within) so coverage = "appears in
+  // the same paragraph" rather than a fragile char-distance check.
+  const paragraphs = text.split(/\n\s*\n/);
+
+  const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const missedTrades: Array<{ player: string; ticker: string }> = [];
+  for (const { player, ticker } of requiredPairs.values()) {
+    const playerRe = new RegExp(`\\b${escape(player)}\\b`, "i");
+    const tickerRe = new RegExp(`\\b${escape(ticker)}\\b`);
+    const found = paragraphs.some(
+      (para) => playerRe.test(para) && tickerRe.test(para)
+    );
+    if (!found) missedTrades.push({ player, ticker });
+  }
+
+  // Unknown ticker check: any ALL-CAPS 2-5-letter standalone token that's
+  // not in knownTickers (and not a finance abbreviation false-positive).
+  const unknownTickers: Array<{ ticker: string; quote: string }> = [];
+  const seenUnknown = new Set<string>();
+  const tokenRe = /\b[A-Z]{2,5}(?:\.[A-Z]{1,3})?\b/g;
+  for (const m of text.matchAll(tokenRe)) {
+    const tok = m[0];
+    if (knownTickers.has(tok)) continue;
+    if (TICKER_FALSE_POSITIVES.has(tok)) continue;
+    if (seenUnknown.has(tok)) continue;
+    seenUnknown.add(tok);
+    const start = Math.max(0, m.index! - 30);
+    const end = Math.min(text.length, m.index! + tok.length + 30);
+    unknownTickers.push({ ticker: tok, quote: text.slice(start, end) });
+  }
+
+  return { missedTrades, unknownTickers };
+}
+
+export interface CommentaryResult {
+  text: string;
+  violations: ViolationReport;
+  factual: FactualViolationReport;
+  /** Phase 6+Y: verifier pass — second Claude call that grades the prose
+   *  against the trade log. `errors` is empty when the verifier accepted
+   *  the prose; populated with one short reason per error otherwise. */
+  verifierErrors: string[];
+  attempts: number;
+}
+
+const MAX_COMMENTARY_ATTEMPTS = 3; // initial + 2 retries
+
+function knownTickersFromData(data: WeeklyReportData): Set<string> {
+  const tickers = new Set<string>();
+  for (const t of data.trades) tickers.add(t.ticker);
+  for (const p of data.leaderboard) {
+    for (const pos of p.positions) tickers.add(pos.ticker);
+  }
+  for (const t of Object.keys(data.currentPrices)) tickers.add(t);
+  return tickers;
+}
+
+// Phase 6 / Option Y: verifier pass. The regex validators
+// (`detectCommentaryViolations`, `detectFactualViolations`) catch concrete
+// patterns: numbers, ranking phrases, ticker hallucinations, missed
+// (player, ticker) coverage. They DON'T catch subtler factual errors:
+// "three tranches on May 6" when there were two; "APP opened on Friday"
+// when it was Thursday; "Eli sold INTC" by inference within otherwise
+// well-formed prose. A second Claude call with a tight fact-checker prompt
+// catches what the regexes miss.
+//
+// Cost ~$0.005-$0.01 per call. Budget approved by user (2026-05-08).
+
+const VERIFIER_PROMPT = (tradeTable: string, prose: string) => `You are an
+exacting fact-checker for a stock-picking-contest weekly email. You will see
+the canonical TRADE LOG (ground truth) and a CANDIDATE PROSE paragraph.
+
+Identify FACTUAL ERRORS in the prose. Be strict and literal.
+
+ERROR TYPES (use these exact labels):
+- WRONG_DAY      — prose names a day-of-week or date that disagrees with the log (e.g. prose says "Friday" but log shows Thursday)
+- WRONG_COUNT    — prose claims a count that disagrees with the log (e.g. "three tranches" when there were two)
+- WRONG_PLAYER   — prose attributes a trade to a player who didn't make it
+- WRONG_DIRECTION — prose says buy when log shows sell (or vice versa)
+- WRONG_CLOSE    — prose says "closed entirely" / "fully exited" but log shows partial trim (or vice versa)
+- MADE_UP_TICKER — prose names a ticker not in the log
+- MISSED_TRADE   — prose drops a trade entirely (every (player, ticker) pair in the log must appear in the prose)
+- WRONG_RATIONALE — prose claims a fact about market context or rationale that isn't supported by either the log or the broader market reality (be conservative; only flag clear factual claims)
+
+OUTPUT FORMAT — one error per line:
+ERROR: <TYPE> | <quote 6-12 word snippet from prose> | <what is actually true per the log>
+
+If there are zero errors, output the literal string:
+NO_ERRORS_FOUND
+
+Do not write anything else. Do not add commentary. Do not flag stylistic
+issues, banned words, or numeric quotes — those are checked elsewhere. Be
+strict on factual claims; lenient on tone.
+
+TRADE LOG (ground truth):
+${tradeTable}
+
+CANDIDATE PROSE:
+${prose}`.trim();
+
+function buildVerifierTradeTable(data: WeeklyReportData): string {
+  if (data.weeklyTrades.length === 0) return "(no trades this week)";
+  const lines: string[] = [];
+  for (const player of data.players) {
+    const playerTrades = data.weeklyTrades.filter((t) => t.playerId === player.id);
+    if (playerTrades.length === 0) {
+      lines.push(`${player.name}: 0 trades`);
+      continue;
+    }
+    lines.push(`${player.name}:`);
+    const sorted = [...playerTrades].sort((a, b) => a.timestamp - b.timestamp);
+    for (const t of sorted) {
+      const [y, m, d] = t.date.split("-").map(Number);
+      const dow = new Date(Date.UTC(y, m - 1, d)).toLocaleString("en-US", {
+        weekday: "short",
+        timeZone: "UTC",
+      });
+      lines.push(`  ${t.date} (${dow}): ${t.type.toUpperCase()} ${t.shares} ${t.ticker} @ $${t.price.toFixed(2)}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+async function runVerifierPass(
+  prose: string,
+  data: WeeklyReportData,
+  anthropicApiKey: string,
+  model: string
+): Promise<{ ok: boolean; errors: string[] }> {
+  const client = new Anthropic({ apiKey: anthropicApiKey });
+  const tradeTable = buildVerifierTradeTable(data);
+  const prompt = VERIFIER_PROMPT(tradeTable, prose);
+
+  try {
+    const response = await client.messages.create({
+      model,
+      max_tokens: 600,
+      messages: [{ role: "user", content: prompt }],
+    });
+    const block = response.content[0];
+    const text = block.type === "text" ? block.text.trim() : "";
+
+    if (text === "NO_ERRORS_FOUND" || /^NO_ERRORS_FOUND/m.test(text)) {
+      return { ok: true, errors: [] };
+    }
+
+    const errors = text
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l.startsWith("ERROR:"))
+      .map((l) => l.slice("ERROR:".length).trim());
+
+    if (errors.length === 0) {
+      // Verifier returned something but no parseable ERROR lines — treat as
+      // ambiguous-pass to avoid endless retry on a flaky verifier.
+      console.warn(`[Verifier] Unparseable response, accepting prose. Response: ${text.slice(0, 200)}`);
+      return { ok: true, errors: [] };
+    }
+
+    return { ok: false, errors };
+  } catch (err) {
+    // Verifier hard-failure (network, API quota, etc.) — fall through and
+    // accept the prose. The regex validators already passed; we don't want
+    // a flaky verifier to block sending entirely.
+    console.warn(
+      `[Verifier] Pass failed (${err instanceof Error ? err.message : err}); accepting prose without verification.`
+    );
+    return { ok: true, errors: [] };
+  }
+}
+
+// Generates AI commentary with three-layered post-hoc validation:
+//   1. Style violations (numbers, ranking-paraphrase) — Phase 4c regex
+//   2. Factual violations (missed trades, unknown tickers) — Phase 6 regex
+//   3. Verifier pass (subtle factual errors: counts, days, attribution by
+//      inference) — Phase 6/Y, second Claude call
+//
+// If any layer trips, regenerates up to MAX_COMMENTARY_ATTEMPTS times.
+// Returns the lowest-total-violation pass. Empty/imperfect commentary beats
+// silent retries that hide the model is drifting, so residual violation
+// counts return to the caller (and land in the email_sends audit row).
 export async function generateCommentary(
   data: WeeklyReportData,
   anthropicApiKey: string,
   model: string = "claude-sonnet-4-5-20250929",
   marketContext?: string
-): Promise<string> {
+): Promise<CommentaryResult> {
   const client = new Anthropic({ apiKey: anthropicApiKey });
-  const message = await client.messages.create({
-    model,
-    max_tokens: 1500,
-    messages: [{ role: "user", content: buildCommentaryPrompt(data, marketContext) }],
-  });
-  const block = message.content[0];
-  const text = block.type === "text" ? block.text : "";
-  logNumericDrift(text);
-  return text;
-}
+  const prompt = buildCommentaryPrompt(data, marketContext);
+  const knownTickers = knownTickersFromData(data);
+  let best: CommentaryResult | null = null;
 
-// After the prompt rewrite, the AI is forbidden from quoting numbers — those
-// come from the deterministic Weekly Highlights block. If it slips, surface
-// the offending snippets in the server log so future drift is visible.
-function logNumericDrift(text: string): void {
-  const dollarMatches = text.match(/\$\s?\d[\d,]*(?:\.\d+)?/g) ?? [];
-  const percentMatches = text.match(/[-+]?\d+(?:\.\d+)?\s?%/g) ?? [];
-  if (dollarMatches.length === 0 && percentMatches.length === 0) return;
-  console.warn(
-    `[Commentary] AI commentary contains numeric claims it should not have quoted. dollars=${JSON.stringify(dollarMatches.slice(0, 5))} percents=${JSON.stringify(percentMatches.slice(0, 5))}`
-  );
+  const score = (r: CommentaryResult) =>
+    r.violations.numericViolations +
+    r.violations.rankingViolations +
+    r.factual.missedTrades.length +
+    r.factual.unknownTickers.length +
+    r.verifierErrors.length;
+
+  for (let attempt = 1; attempt <= MAX_COMMENTARY_ATTEMPTS; attempt++) {
+    const message = await client.messages.create({
+      model,
+      max_tokens: 1500,
+      messages: [{ role: "user", content: prompt }],
+    });
+    const block = message.content[0];
+    const text = block.type === "text" ? block.text : "";
+    const violations = detectCommentaryViolations(text);
+    const factual = detectFactualViolations(text, data.weeklyTrades, data.players, knownTickers);
+
+    // Only run the (more expensive) verifier pass when the regex layers
+    // pass — no point fact-checking prose that already has style/coverage
+    // violations and will retry anyway.
+    const regexClean =
+      violations.numericViolations === 0 &&
+      violations.rankingViolations === 0 &&
+      factual.missedTrades.length === 0 &&
+      factual.unknownTickers.length === 0;
+
+    let verifierErrors: string[] = [];
+    if (regexClean) {
+      const verifyResult = await runVerifierPass(text, data, anthropicApiKey, model);
+      verifierErrors = verifyResult.errors;
+    }
+
+    const result: CommentaryResult = { text, violations, factual, verifierErrors, attempts: attempt };
+    if (score(result) === 0) return result;
+    if (!best || score(result) < score(best)) best = result;
+    console.warn(
+      `[Commentary] Attempt ${attempt} — style: num=${violations.numericViolations} rank=${violations.rankingViolations}; ` +
+        `facts: missed=${factual.missedTrades.length} (${factual.missedTrades.slice(0, 3).map((m) => `${m.player}/${m.ticker}`).join(",")}) ` +
+        `unknownTickers=${factual.unknownTickers.length} (${factual.unknownTickers.slice(0, 3).map((u) => u.ticker).join(",")}); ` +
+        `verifier: errors=${verifierErrors.length}${verifierErrors.length > 0 ? " — " + verifierErrors.slice(0, 3).map((e) => e.slice(0, 100)).join(" / ") : ""}`
+    );
+  }
+  return best!;
 }
 
 // ---------- HTML Email Template ----------
@@ -691,7 +1095,7 @@ export function buildEmailHtml(
 
     <div style="background: white; border-radius: 0 0 12px 12px; border: 1px solid #E5E7EB; border-top: none;">
 
-      <!-- Weekly Highlights (deterministic) -->
+      <!-- 7-Day Price Moves (deterministic) -->
       ${highlightsHtml}
 
       <!-- Commentary (AI narrative) -->

@@ -6,7 +6,11 @@ import {
   buildCommentaryPrompt,
   buildEmailHtml,
   buildPlainText,
+  buildWeeklyHighlights,
+  detectCommentaryViolations,
+  detectFactualViolations,
   formatCommentary,
+  renderHighlightsHtml,
 } from "@/lib/email";
 import { htmlToCommentaryMarkdown } from "@/lib/commentary";
 
@@ -232,15 +236,66 @@ describe("buildCommentaryPrompt", () => {
     expect(prompt).toContain("matter-of-fact");
   });
 
-  it("references the deterministic weekly highlights block", () => {
-    // The AI is told the facts are rendered above its commentary and should
-    // not restate them. The prompt must surface the highlights summary so the
-    // model has the context for rationale narrative.
+  it("starves the AI of pre-ranked data so it cannot paraphrase rankings", () => {
+    // The deterministic weekly highlights block is rendered ABOVE the
+    // commentary in the email; the AI doesn't need (and shouldn't see) the
+    // ranking data. Feeding it "biggest gainer X" tempts paraphrase ("X was
+    // the standout pick"), bypassing the no-numbers rule. Phase 4a deletes
+    // the ranking summary from the prompt entirely.
+    //
+    // The string "biggest gainer/laggard" still appears once — in the
+    // prohibition rule itself — but the data-block patterns (per-player
+    // ranking lines, contest-wide top/bottom mover lines) are gone.
     const data = buildReportData(players, trades, currentPrices, {}, "2026-02-10");
     const prompt = buildCommentaryPrompt(data);
 
-    expect(prompt).toContain("Weekly highlights");
-    expect(prompt).toContain("DO NOT restate");
+    // Per-player data lines from renderHighlightsForPrompt — gone.
+    expect(prompt).not.toMatch(/best mover [A-Z]+\s+[+\-]/);
+    expect(prompt).not.toMatch(/worst mover [A-Z]+\s+[+\-]/);
+    // Contest-wide ranking lines from renderHighlightsForPrompt — gone.
+    expect(prompt).not.toContain("Contest top mover:");
+    expect(prompt).not.toContain("Contest bottom mover:");
+    // "Weekly highlights" section header from old prompt — gone.
+    expect(prompt).not.toMatch(/Weekly highlights[^\w]/);
+  });
+
+  it("includes a cross-portfolio holdings block for verbatim attribution", () => {
+    // The AI used to derive cross-holdings from the standings table and got
+    // it wrong (claiming a ticker was held "across all portfolios" when only
+    // some held it). The prompt now includes a pre-computed lookup.
+    const data = buildReportData(players, trades, currentPrices, {}, "2026-02-10");
+    const prompt = buildCommentaryPrompt(data);
+
+    expect(prompt).toContain("Cross-portfolio holdings");
+    expect(prompt).toContain("use these verbatim for attribution");
+  });
+
+  it("includes a hard rule banning ranking-paraphrase language", () => {
+    // Phase 4c also enforces this via detectCommentaryViolations regex
+    // matching, but the prompt rule is the first line of defense.
+    const data = buildReportData(players, trades, currentPrices, {}, "2026-02-10");
+    const prompt = buildCommentaryPrompt(data);
+
+    expect(prompt).toContain("ranking language");
+    expect(prompt).toContain("standout");
+    expect(prompt).toContain("led the charge");
+  });
+
+  it("specifies edge-case behavior for 0-trade and 1-trade weeks", () => {
+    const data = buildReportData(players, trades, currentPrices, {}, "2026-02-10");
+    const prompt = buildCommentaryPrompt(data);
+
+    expect(prompt).toContain("EDGE CASES");
+    expect(prompt).toContain("No trades this week");
+    expect(prompt).toContain("only one trade");
+  });
+
+  it("uses active examples to prevent inferring weekly returns on new positions", () => {
+    const data = buildReportData(players, trades, currentPrices, {}, "2026-02-10");
+    const prompt = buildCommentaryPrompt(data);
+
+    expect(prompt).toMatch(/✓.*opened a HOOD stake/);
+    expect(prompt).toMatch(/✗.*as semiconductor strength returned/);
   });
 
   it("forbids quoting dollar amounts and percentages", () => {
@@ -555,5 +610,273 @@ describe("buildPlainText", () => {
     expect(text).toContain("PORTFOLIO DETAILS");
     expect(text).toContain("$50.00"); // avg cost
     expect(text).toContain("$55.00"); // current price
+  });
+});
+
+// ---- Phase 4 / 5: deterministic highlights + content-quality coverage ----
+//
+// `buildWeeklyHighlights` is the engine producing the deterministic facts
+// that render above the AI commentary. It had zero direct tests before
+// Phase 5; the failure modes that were silently shipping (positions dropped
+// on missing price history, unfiltered new-this-week ranking, contest-wide
+// top/bottom selection) are now covered.
+
+describe("buildWeeklyHighlights", () => {
+  // Helper: trades that establish position(s) one ticker per player at $100,
+  // dated before the report window so they're "held at week-start".
+  const trades: Trade[] = [
+    makeTrade({ playerId: "p1", ticker: "AAPL", date: "2026-01-15", price: 100, shares: 100 }),
+    makeTrade({ playerId: "p2", ticker: "GOOG", date: "2026-01-15", price: 100, shares: 50 }),
+    makeTrade({ playerId: "p3", ticker: "MSFT", date: "2026-01-15", price: 100, shares: 80 }),
+  ];
+  const currentPrices = { AAPL: 110, GOOG: 95, MSFT: 105 };
+  // Prior-week-cutoff prices for "2026-02-10" report: cutoff = "2026-02-03"
+  const priceHistory = {
+    AAPL: { "2026-02-03": 100 }, // +10% over week
+    GOOG: { "2026-02-03": 100 }, // -5%
+    MSFT: { "2026-02-03": 100 }, // +5%
+  };
+
+  it("computes per-player best 7-day move (single open position)", () => {
+    const data = buildReportData(players, trades, currentPrices, priceHistory, "2026-02-10");
+    const h = buildWeeklyHighlights(data);
+
+    const daddy = h.perPlayer.find((p) => p.name === "Daddy");
+    expect(daddy?.best?.ticker).toBe("AAPL");
+    expect(daddy?.best?.pct).toBeCloseTo(10, 5);
+    // worst is null when only one position (sorted.length > 1 check)
+    expect(daddy?.worst).toBeNull();
+  });
+
+  it("selects contest-wide best & worst across all players", () => {
+    const data = buildReportData(players, trades, currentPrices, priceHistory, "2026-02-10");
+    const h = buildWeeklyHighlights(data);
+
+    expect(h.contestTop?.ticker).toBe("AAPL"); // +10%
+    expect(h.contestTop?.player).toBe("Daddy");
+    expect(h.contestBottom?.ticker).toBe("GOOG"); // -5%
+    expect(h.contestBottom?.player).toBe("Eli");
+  });
+
+  it("excludes positions opened this week from rankings", () => {
+    // Yitzi opens HOOD this week (after the cutoff).
+    const tradesWithNew: Trade[] = [
+      ...trades,
+      makeTrade({ playerId: "p3", ticker: "HOOD", date: "2026-02-08", price: 70, shares: 100 }),
+    ];
+    const cp = { ...currentPrices, HOOD: 80 };
+    // priceHistory for HOOD at the cutoff would imply +14%, the largest move.
+    // Because HOOD is new-this-week it must be excluded.
+    const ph = { ...priceHistory, HOOD: { "2026-02-03": 70 } };
+
+    const data = buildReportData(players, tradesWithNew, cp, ph, "2026-02-10");
+    const h = buildWeeklyHighlights(data);
+
+    const yitzi = h.perPlayer.find((p) => p.name === "Yitzi");
+    expect(yitzi?.newThisWeek).toContain("HOOD");
+    // best/worst for Yitzi only reflects MSFT (+5%); HOOD is excluded
+    expect(yitzi?.best?.ticker).toBe("MSFT");
+    // Contest top mover must be AAPL (+10%), not HOOD (+14%)
+    expect(h.contestTop?.ticker).toBe("AAPL");
+  });
+
+  it("warns and excludes positions when priceHistory is missing for the cutoff", () => {
+    // Drop AAPL's history → it should be excluded with a warning instead of
+    // silently disappearing (the pre-Phase-4e behavior).
+    const phPartial = {
+      GOOG: { "2026-02-03": 100 },
+      MSFT: { "2026-02-03": 100 },
+    };
+    const data = buildReportData(players, trades, currentPrices, phPartial, "2026-02-10");
+    const h = buildWeeklyHighlights(data);
+
+    expect(h.warnings.some((w) => w.includes("AAPL") && w.includes("Daddy"))).toBe(true);
+    // Daddy has no other positions, so best is null; AAPL was excluded
+    const daddy = h.perPlayer.find((p) => p.name === "Daddy");
+    expect(daddy?.best).toBeNull();
+    // Contest top now reflects MSFT (+5%), since AAPL was excluded
+    expect(h.contestTop?.ticker).toBe("MSFT");
+  });
+
+  it("returns empty warnings when all positions have price data", () => {
+    const data = buildReportData(players, trades, currentPrices, priceHistory, "2026-02-10");
+    const h = buildWeeklyHighlights(data);
+    expect(h.warnings).toEqual([]);
+  });
+
+  it("counts trades per player from the weekly window", () => {
+    const tradesWithWeekly: Trade[] = [
+      ...trades,
+      makeTrade({ playerId: "p1", ticker: "TSLA", date: "2026-02-08", price: 200, shares: 50 }),
+      makeTrade({ playerId: "p1", ticker: "AAPL", date: "2026-02-09", type: "sell", price: 105, shares: 50 }),
+    ];
+    const data = buildReportData(players, tradesWithWeekly, { ...currentPrices, TSLA: 210 }, priceHistory, "2026-02-10");
+    const h = buildWeeklyHighlights(data);
+
+    const daddy = h.perPlayer.find((p) => p.name === "Daddy");
+    expect(daddy?.tradeCount).toBe(2); // buy TSLA + sell AAPL this week
+    const eli = h.perPlayer.find((p) => p.name === "Eli");
+    expect(eli?.tradeCount).toBe(0);
+  });
+});
+
+describe("renderHighlightsHtml", () => {
+  // Phase 4e: HTML labels are "Best 7-day move" / "Worst 7-day move", not
+  // "Top mover" / "Laggard" — so recipients (and downstream LLMs eyeballing
+  // the email) don't conflate a ticker price-move with a "best trade" claim.
+  it("uses 7-day-move labels rather than top-mover labels", () => {
+    const html = renderHighlightsHtml({
+      contestTop: { ticker: "INTC", pct: 5.2, player: "Daddy" },
+      contestBottom: { ticker: "MDI", pct: -1.8, player: "Eli" },
+      perPlayer: [
+        { playerId: "p1", name: "Daddy", best: { ticker: "INTC", pct: 5.2 }, worst: null, newThisWeek: [], tradeCount: 0 },
+      ],
+      warnings: [],
+    });
+
+    expect(html).toContain("Best 7-day move");
+    expect(html).toContain("Worst 7-day move");
+    expect(html).toContain("7-Day Price Moves");
+    expect(html).not.toContain(">Top mover:<");
+    expect(html).not.toContain(">Laggard:<");
+  });
+});
+
+describe("detectCommentaryViolations", () => {
+  it("returns zero violations on clean rationale prose", () => {
+    const v = detectCommentaryViolations(
+      "Eli rotated out of CRCL and built a fresh HOOD stake in two tranches."
+    );
+    expect(v.numericViolations).toBe(0);
+    expect(v.rankingViolations).toBe(0);
+  });
+
+  it("counts dollar amounts as numeric violations", () => {
+    const v = detectCommentaryViolations("Realized a $3,896 gain on the trim.");
+    expect(v.numericViolations).toBeGreaterThan(0);
+    expect(v.numericSnippets).toContain("$3,896");
+  });
+
+  it("counts percentages as numeric violations", () => {
+    const v = detectCommentaryViolations("INTC rallied 20.5% on AI capex news.");
+    expect(v.numericViolations).toBeGreaterThan(0);
+    expect(v.numericSnippets[0]).toMatch(/20\.5\s?%/);
+  });
+
+  it("detects ranking-paraphrase: 'best trade'", () => {
+    const v = detectCommentaryViolations("HOOD was the best trade of the week.");
+    expect(v.rankingViolations).toBe(1);
+    expect(v.rankingSnippets[0].toLowerCase()).toContain("best trade");
+  });
+
+  it("detects ranking-paraphrase: 'biggest gainer'", () => {
+    const v = detectCommentaryViolations("Yitzi's biggest gainer was an outlier this week.");
+    expect(v.rankingViolations).toBe(1);
+  });
+
+  it("detects ranking-paraphrase: 'standout'", () => {
+    const v = detectCommentaryViolations("HOOD was the standout of the portfolio.");
+    expect(v.rankingViolations).toBe(1);
+  });
+
+  it("detects ranking-paraphrase: 'led the charge'", () => {
+    const v = detectCommentaryViolations("INTC led the charge on semiconductor strength.");
+    expect(v.rankingViolations).toBe(1);
+  });
+
+  it("detects ranking-paraphrase: 'dominated the week'", () => {
+    const v = detectCommentaryViolations("Tech dominated the week.");
+    expect(v.rankingViolations).toBe(1);
+  });
+
+  it("does not match 'best' inside other words (e.g., 'bestow')", () => {
+    const v = detectCommentaryViolations("That trade did not bestow much luck.");
+    expect(v.rankingViolations).toBe(0);
+  });
+
+  it("counts numeric and ranking violations independently", () => {
+    const v = detectCommentaryViolations(
+      "INTC was the standout, up 20.5% — a $4,000 gain on Daddy's biggest gainer."
+    );
+    expect(v.numericViolations).toBeGreaterThanOrEqual(2); // 20.5% + $4,000
+    expect(v.rankingViolations).toBeGreaterThanOrEqual(2); // standout + biggest gainer
+  });
+});
+
+// ---- Phase 6: factual hallucination validator ----
+//
+// Catches the failure class from the 2026-05-08 email:
+//   - Missed trades: AI never mentions Yitzi's HOOD adds despite the prompt
+//   - Wrong attribution: "Both also harvested INTC" but only Yitzi did
+//   - Hallucinated tickers: AI mentions a ticker no one trades
+// detectCommentaryViolations is regex-only and can't see these. The
+// factual validator cross-checks the prose against the actual trade log.
+
+describe("detectFactualViolations", () => {
+  const tradePlayers = [
+    { id: "p1", name: "Daddy", color: "#000" },
+    { id: "p2", name: "Eli", color: "#111" },
+    { id: "p3", name: "Yitzi", color: "#222" },
+  ];
+
+  // Simulating the 2026-05-08 actual trade log
+  const weeklyTrades = [
+    makeTrade({ playerId: "p2", ticker: "LFMD", date: "2026-05-06", type: "sell" }),
+    makeTrade({ playerId: "p3", ticker: "LFMD", date: "2026-05-06", type: "sell" }),
+    makeTrade({ playerId: "p3", ticker: "HOOD", date: "2026-05-06", type: "buy" }),
+    makeTrade({ playerId: "p3", ticker: "INTC", date: "2026-05-06", type: "sell" }),
+    makeTrade({ playerId: "p3", ticker: "HOOD", date: "2026-05-06", type: "buy" }),
+    makeTrade({ playerId: "p3", ticker: "APP", date: "2026-05-07", type: "buy" }),
+    makeTrade({ playerId: "p2", ticker: "CVV", date: "2026-05-07", type: "buy" }),
+    makeTrade({ playerId: "p3", ticker: "TER", date: "2026-05-08", type: "buy" }),
+  ];
+  const knownTickers = new Set(["LFMD", "HOOD", "INTC", "APP", "CVV", "TER", "MDI", "QS"]);
+
+  it("flags a missed trade when (player, ticker) doesn't co-occur", () => {
+    // The 5/8 prose this would have caught: it never mentions HOOD
+    const prose = `Eli reduced his LFMD stake. Yitzi followed similar logic, trimming LFMD twice on May 6 and closing the position entirely on May 7, then deployed those proceeds into a new APP position. Both harvested gains from INTC. Eli shifted into a new CVV position. Yitzi added to TER.`;
+    const v = detectFactualViolations(prose, weeklyTrades, tradePlayers, knownTickers);
+    // Yitzi has HOOD trades this week but HOOD isn't in the prose
+    expect(v.missedTrades.some((m) => m.player === "Yitzi" && m.ticker === "HOOD")).toBe(true);
+  });
+
+  it("returns no missed trades when every (player, ticker) is co-mentioned", () => {
+    const prose =
+      "Eli sold LFMD repeatedly. Eli also opened CVV. " +
+      "Yitzi sold LFMD, bought HOOD twice, sold INTC, opened APP, and added TER.";
+    const v = detectFactualViolations(prose, weeklyTrades, tradePlayers, knownTickers);
+    expect(v.missedTrades).toEqual([]);
+  });
+
+  it("flags hallucinated tickers not in the contest's known set", () => {
+    const prose = "Eli rotated capital into NVDA after their earnings beat.";
+    const v = detectFactualViolations(prose, weeklyTrades, tradePlayers, knownTickers);
+    expect(v.unknownTickers.some((u) => u.ticker === "NVDA")).toBe(true);
+  });
+
+  it("does NOT flag finance abbreviations as unknown tickers", () => {
+    const prose = "The CPI print missed; SPX dropped on the news. AI capex remained strong.";
+    const v = detectFactualViolations(prose, weeklyTrades, tradePlayers, knownTickers);
+    // CPI, SPX, AI should all be recognized as finance/general acronyms, not tickers
+    expect(v.unknownTickers.map((u) => u.ticker)).not.toContain("CPI");
+    expect(v.unknownTickers.map((u) => u.ticker)).not.toContain("SPX");
+    expect(v.unknownTickers.map((u) => u.ticker)).not.toContain("AI");
+  });
+
+  it("respects word boundaries (TER doesn't match 'after' or 'INTER')", () => {
+    // Yitzi's TER trade requires "Yitzi" + "TER" to co-occur. Words like
+    // "after" embed "ter" but with the \b regex it shouldn't match TER.
+    const prose = "Yitzi sold LFMD, bought HOOD, sold INTC, opened APP. Daddy stood pat after a quiet week.";
+    const v = detectFactualViolations(prose, weeklyTrades, tradePlayers, knownTickers);
+    // TER should be flagged as missed (Yitzi's TER trade not co-mentioned)
+    expect(v.missedTrades.some((m) => m.player === "Yitzi" && m.ticker === "TER")).toBe(true);
+  });
+
+  it("counts a (player, ticker) co-occurrence within ~250 chars as covered", () => {
+    // Ticker mentioned ~150 chars after player name (typical sentence span)
+    const filler = "did some things over the course of the day, taking advantage of the morning move and then waiting until later.";
+    const prose = `Yitzi ${filler} The notable transaction was an LFMD sell.`;
+    const v = detectFactualViolations(prose, weeklyTrades, tradePlayers, knownTickers);
+    expect(v.missedTrades.some((m) => m.player === "Yitzi" && m.ticker === "LFMD")).toBe(false);
   });
 });

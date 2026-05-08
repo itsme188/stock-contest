@@ -55,6 +55,20 @@ function getDb(): Database.Database {
         created_at TEXT NOT NULL DEFAULT (datetime('now'))
       )
     `);
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS email_sends (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp INTEGER NOT NULL,
+        kind TEXT NOT NULL,
+        status TEXT NOT NULL,
+        recipients_count INTEGER,
+        report_date TEXT,
+        numeric_violations INTEGER,
+        ranking_violations INTEGER,
+        error_message TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    `);
     migrateTradesFromBlob(db);
   }
   return db;
@@ -205,6 +219,68 @@ export function getAuditLog(): { action: string; detail: string; created_at: str
   }[];
 }
 
+// --- Email Send Audit Log ---
+//
+// Records every weekly-email and daily-refresh run with status, recipients,
+// AI commentary violation counts, and error message. Phase 2 of the
+// reliability overhaul: replaces the single `lastWeeklyEmailSentDate` field
+// (which only records "did it succeed today") with a full history that the
+// dashboard surfaces and the failure-alert email cites for context.
+
+export type EmailSendKind = "weekly" | "daily-refresh" | "failure-alert";
+export type EmailSendStatus = "ok" | "skipped" | "error";
+
+export interface EmailSendRow {
+  id: number;
+  timestamp: number;
+  kind: EmailSendKind;
+  status: EmailSendStatus;
+  recipients_count: number | null;
+  report_date: string | null;
+  numeric_violations: number | null;
+  ranking_violations: number | null;
+  error_message: string | null;
+  created_at: string;
+}
+
+export interface RecordEmailSendInput {
+  kind: EmailSendKind;
+  status: EmailSendStatus;
+  recipients?: number;
+  reportDate?: string;
+  numericViolations?: number;
+  rankingViolations?: number;
+  errorMessage?: string;
+}
+
+export function recordEmailSend(input: RecordEmailSendInput): void {
+  const conn = getDb();
+  conn
+    .prepare(
+      `INSERT INTO email_sends
+         (timestamp, kind, status, recipients_count, report_date,
+          numeric_violations, ranking_violations, error_message)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      Date.now(),
+      input.kind,
+      input.status,
+      input.recipients ?? null,
+      input.reportDate ?? null,
+      input.numericViolations ?? null,
+      input.rankingViolations ?? null,
+      input.errorMessage ?? null
+    );
+}
+
+export function listRecentEmailSends(limit = 20): EmailSendRow[] {
+  const conn = getDb();
+  return conn
+    .prepare("SELECT * FROM email_sends ORDER BY id DESC LIMIT ?")
+    .all(limit) as EmailSendRow[];
+}
+
 // --- Database Health ---
 
 export function checkDbIntegrity(): boolean {
@@ -247,6 +323,20 @@ export function _initSchema(conn: Database.Database): void {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       action TEXT NOT NULL,
       detail TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+  conn.exec(`
+    CREATE TABLE IF NOT EXISTS email_sends (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      timestamp INTEGER NOT NULL,
+      kind TEXT NOT NULL,
+      status TEXT NOT NULL,
+      recipients_count INTEGER,
+      report_date TEXT,
+      numeric_violations INTEGER,
+      ranking_violations INTEGER,
+      error_message TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     )
   `);

@@ -195,25 +195,6 @@ describe("fetchVitalKnowledge", () => {
     expect(result).toContain("Markets rallied on strong earnings.");
   });
 
-  it("sorts multiple emails chronologically", async () => {
-    mockSearch.mockResolvedValue([102, 101]);
-    mockFetchOne
-      .mockResolvedValueOnce(
-        makeMsg(102, "Wednesday Note", "2026-02-19T09:00:00Z", plainStructure)
-      )
-      .mockResolvedValueOnce(
-        makeMsg(101, "Monday Note", "2026-02-17T09:00:00Z", plainStructure)
-      );
-    mockDownload
-      .mockResolvedValueOnce(makeTextDownload("Wednesday content"))
-      .mockResolvedValueOnce(makeTextDownload("Monday content"));
-
-    const result = await fetchVitalKnowledge("user@gmail.com", "pass123");
-    const mondayIdx = result.indexOf("Monday");
-    const wednesdayIdx = result.indexOf("Wednesday");
-    expect(mondayIdx).toBeLessThan(wednesdayIdx);
-  });
-
   it("falls back to text/html and strips tags", async () => {
     mockSearch.mockResolvedValue([103]);
     mockFetchOne.mockResolvedValue(
@@ -229,7 +210,8 @@ describe("fetchVitalKnowledge", () => {
   });
 
   it("truncates individual emails exceeding per-email limit", async () => {
-    const longBody = "A".repeat(4000);
+    // MAX_CHARS_PER_EMAIL is now 8000; use a body well above that.
+    const longBody = "A".repeat(9000);
     mockSearch.mockResolvedValue([104]);
     mockFetchOne.mockResolvedValue(
       makeMsg(104, "Long Note", "2026-02-20T09:00:00Z", plainStructure)
@@ -238,39 +220,40 @@ describe("fetchVitalKnowledge", () => {
 
     const result = await fetchVitalKnowledge("user@gmail.com", "pass123");
     expect(result).toContain("...[truncated]");
-    expect(result.length).toBeLessThan(4000);
+    expect(result.length).toBeLessThan(longBody.length);
   });
 
-  it("truncates total output exceeding total limit", async () => {
-    const body = "B".repeat(2500);
-    const uids = [101, 102, 103, 104, 105];
-    mockSearch.mockResolvedValue(uids);
-
-    for (let i = 0; i < uids.length; i++) {
-      mockFetchOne.mockResolvedValueOnce(
-        makeMsg(uids[i], `Note ${i}`, `2026-02-${17 + i}T09:00:00Z`, plainStructure)
-      );
-      mockDownload.mockResolvedValueOnce(makeTextDownload(body));
-    }
-
-    const result = await fetchVitalKnowledge("user@gmail.com", "pass123");
-    expect(result.length).toBeLessThanOrEqual(8000 + "\n...[truncated]".length);
-  });
-
-  it("limits to 5 most recent emails", async () => {
+  it("fetches only the most recent recap (limit 1)", async () => {
+    // Phase 8 (2026-05-08): the user asked for the Friday weekly-recap
+    // email only, not aggregated daily notes. fetchVitalKnowledge now
+    // limits to MAX_EMAILS=1 and filters search by subject pattern.
     const uids = [1, 2, 3, 4, 5, 6, 7];
     mockSearch.mockResolvedValue(uids);
-
-    for (let i = 0; i < 5; i++) {
-      mockFetchOne.mockResolvedValueOnce(
-        makeMsg(uids[2 + i], `Note`, `2026-02-${20 + i}T09:00:00Z`, plainStructure)
-      );
-      mockDownload.mockResolvedValueOnce(makeTextDownload("Content"));
-    }
+    mockFetchOne.mockResolvedValue(
+      makeMsg(7, "Vital Talking Points Recap for Week ended 2026-02-26", "2026-02-27T09:00:00Z", plainStructure)
+    );
+    mockDownload.mockResolvedValue(makeTextDownload("Weekly recap content"));
 
     await fetchVitalKnowledge("user@gmail.com", "pass123");
-    // Should only fetch the last 5 UIDs (3,4,5,6,7), not all 7
-    expect(mockFetchOne).toHaveBeenCalledTimes(5);
+    expect(mockFetchOne).toHaveBeenCalledTimes(1);
+  });
+
+  it("filters search by subject pattern (recap-only)", async () => {
+    mockSearch.mockResolvedValue([1]);
+    mockFetchOne.mockResolvedValue(
+      makeMsg(1, "Recap", "2026-02-27T09:00:00Z", plainStructure)
+    );
+    mockDownload.mockResolvedValue(makeTextDownload("ok"));
+
+    await fetchVitalKnowledge("user@gmail.com", "pass123");
+    // The IMAP search call must include the subject filter so daily-digest
+    // emails are excluded server-side.
+    expect(mockSearch).toHaveBeenCalled();
+    const searchArgs = mockSearch.mock.calls[0][0];
+    expect(searchArgs).toMatchObject({
+      from: "updates@vitalknowledge.net",
+      subject: expect.stringContaining("Vital Talking Points Recap"),
+    });
   });
 
   it("skips messages with no body structure", async () => {

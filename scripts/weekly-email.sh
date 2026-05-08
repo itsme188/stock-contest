@@ -1,6 +1,6 @@
 #!/bin/bash
 # weekly-email.sh — Refresh prices then send weekly contest email
-# Called by launchd every Friday at 4:20 PM
+# Called by launchd every Friday at 4:45 PM
 
 set -euo pipefail
 

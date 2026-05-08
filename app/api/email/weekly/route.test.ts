@@ -3,11 +3,24 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 vi.mock("@/lib/db", () => ({
   getContestData: vi.fn(),
   saveContestData: vi.fn(),
+  recordEmailSend: vi.fn(),
 }));
 
 vi.mock("@/lib/email", () => ({
   buildReportData: vi.fn(() => ({ reportDate: "2026-04-20" })),
-  generateCommentary: vi.fn(async () => "mock commentary"),
+  buildWeeklyHighlights: vi.fn(() => ({
+    contestTop: null,
+    contestBottom: null,
+    perPlayer: [],
+    warnings: [],
+  })),
+  generateCommentary: vi.fn(async () => ({
+    text: "mock commentary",
+    violations: { numericViolations: 0, rankingViolations: 0, numericSnippets: [], rankingSnippets: [] },
+    factual: { missedTrades: [], unknownTickers: [] },
+    verifierErrors: [],
+    attempts: 1,
+  })),
   sendWeeklyEmail: vi.fn(async () => {}),
 }));
 
@@ -18,6 +31,24 @@ vi.mock("@/lib/vital-knowledge", () => ({
 vi.mock("@/lib/prices", () => ({
   backfillPrices: vi.fn(async () => ({ tickers: 0, daysAdded: 0, errors: [] })),
 }));
+
+vi.mock("@/lib/prices-refresh", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/prices-refresh")>(
+    "@/lib/prices-refresh"
+  );
+  return {
+    ...actual,
+    refreshAllOpenPrices: vi.fn(async () => ({
+      source: "ibkr" as const,
+      updated: {},
+      priceDates: {},
+      errors: [],
+      date: "2026-04-20",
+      pricesAreFresh: true,
+      staleRetries: 0,
+    })),
+  };
+});
 
 import { POST } from "./route";
 import { getContestData, saveContestData } from "@/lib/db";

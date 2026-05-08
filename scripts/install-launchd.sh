@@ -41,15 +41,57 @@ fi
 
 mkdir -p "$SCRIPTS_DIR" "$LOGS_DIR" "$LAUNCH_AGENTS_DIR"
 
-cp "${REPO_DIR}/scripts/${SCRIPT_NAME}" "${SCRIPTS_DIR}/${SCRIPT_NAME}"
-chmod +x "${SCRIPTS_DIR}/${SCRIPT_NAME}"
+# Copy every shell script the launchd agent might call. Previously only the
+# named entry-point was copied; weekly-email.sh references backup-db.sh as a
+# relative dep, which silently failed every run with "No such file or
+# directory" because the dep was never installed.
+copy_script() {
+  local src="$1"
+  local dst="$2"
+  if [ ! -f "$src" ]; then
+    echo "ERROR: source script missing: $src" >&2
+    exit 1
+  fi
+  cp "$src" "$dst"
+  chmod +x "$dst"
+  if [ ! -x "$dst" ]; then
+    echo "ERROR: failed to install $dst" >&2
+    exit 1
+  fi
+}
+
+for sh in "${REPO_DIR}/scripts/"*.sh; do
+  base="$(basename "$sh")"
+  copy_script "$sh" "${SCRIPTS_DIR}/${base}"
+done
+
+if [ ! -f "${REPO_DIR}/scripts/${PLIST_NAME}" ]; then
+  echo "ERROR: plist not found in repo: ${REPO_DIR}/scripts/${PLIST_NAME}" >&2
+  exit 1
+fi
 cp "${REPO_DIR}/scripts/${PLIST_NAME}" "$PLIST_TARGET"
 
 # Reload so updated paths/scripts take effect even if already installed
 launchctl unload "$PLIST_TARGET" 2>/dev/null || true
-launchctl load "$PLIST_TARGET"
+if ! launchctl load "$PLIST_TARGET"; then
+  echo "ERROR: launchctl load failed for $PLIST_TARGET" >&2
+  exit 1
+fi
+
+# Verify the agent actually registered. Previously a silent load failure
+# would leave the user thinking the job was installed when it wasn't.
+sleep 1
+if ! launchctl list | grep -q "$LABEL"; then
+  echo "ERROR: ${LABEL} did not register with launchd after load" >&2
+  exit 1
+fi
 
 echo "Installed ${LABEL}:"
 echo "  script:  ${SCRIPTS_DIR}/${SCRIPT_NAME}"
+for dep in "${SCRIPTS_DIR}/"*.sh; do
+  if [ "$(basename "$dep")" != "$SCRIPT_NAME" ]; then
+    echo "  dep:     $dep"
+  fi
+done
 echo "  plist:   ${PLIST_TARGET}"
 echo "  logs:    ${LOGS_DIR}/"

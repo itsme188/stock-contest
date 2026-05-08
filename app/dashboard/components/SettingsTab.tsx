@@ -1,10 +1,22 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import {
   type Player,
   type Trade,
   STARTING_CASH,
   formatCurrency,
 } from "@/lib/contest";
+
+interface EmailSendRow {
+  id: number;
+  timestamp: number;
+  kind: string;
+  status: string;
+  recipients_count: number | null;
+  report_date: string | null;
+  numeric_violations: number | null;
+  ranking_violations: number | null;
+  error_message: string | null;
+}
 
 interface SettingsTabProps {
   contestStartDate: string;
@@ -55,6 +67,21 @@ export default function SettingsTab({
   const [emailStatus, setEmailStatus] = useState("");
   const [backfilling, setBackfilling] = useState(false);
   const [backfillStatus, setBackfillStatus] = useState("");
+  const [recentSends, setRecentSends] = useState<EmailSendRow[] | null>(null);
+
+  const fetchRecentSends = useCallback(async () => {
+    try {
+      const res = await fetch("/api/email/sends?limit=8");
+      const data = await res.json();
+      if (res.ok) setRecentSends(data.sends ?? []);
+    } catch {
+      // non-critical: leave previous value
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchRecentSends();
+  }, [fetchRecentSends]);
 
   const backfillPriceHistory = async () => {
     setBackfilling(true);
@@ -91,6 +118,7 @@ export default function SettingsTab({
       setEmailStatus(`Error: ${err instanceof Error ? err.message : err}`);
     } finally {
       setSendingEmail(false);
+      fetchRecentSends();
     }
   };
 
@@ -287,6 +315,73 @@ export default function SettingsTab({
             )}
           </div>
         </div>
+      </div>
+
+      {/* Recent Email Activity (Phase 2) — surfaces success/failure of every
+          scheduled run + manual send so silent failures stop being invisible. */}
+      <div className="bg-white rounded-xl border border-gray-200 p-6">
+        <h2 className="text-lg font-semibold text-gray-900 mb-2">
+          Recent Email Activity
+        </h2>
+        <p className="text-sm text-gray-600 mb-4">
+          Audit log of weekly-email and daily-refresh runs. Failures also trigger a notification email to{" "}
+          <span className="font-mono">isaac@wolfsonfamily.com</span>.
+        </p>
+        {recentSends === null ? (
+          <p className="text-sm text-gray-400">Loading…</p>
+        ) : recentSends.length === 0 ? (
+          <p className="text-sm text-gray-500">No runs recorded yet.</p>
+        ) : (
+          <div className="space-y-1">
+            {recentSends.map((row) => {
+              const statusColor =
+                row.status === "ok"
+                  ? "bg-green-100 text-green-800"
+                  : row.status === "skipped"
+                  ? "bg-gray-100 text-gray-700"
+                  : "bg-red-100 text-red-800";
+              const ts = new Date(row.timestamp).toLocaleString(undefined, {
+                month: "short",
+                day: "numeric",
+                hour: "2-digit",
+                minute: "2-digit",
+              });
+              return (
+                <div
+                  key={row.id}
+                  className="flex items-start gap-3 py-1.5 text-sm border-b border-gray-100 last:border-0"
+                >
+                  <span className="text-xs text-gray-500 font-mono w-28 flex-shrink-0">
+                    {ts}
+                  </span>
+                  <span className={`text-xs font-semibold px-2 py-0.5 rounded ${statusColor} flex-shrink-0 w-16 text-center`}>
+                    {row.status}
+                  </span>
+                  <span className="text-xs text-gray-700 w-28 flex-shrink-0">
+                    {row.kind}
+                  </span>
+                  <span className="text-xs text-gray-600 flex-1 break-words">
+                    {row.status === "ok" && row.kind === "weekly"
+                      ? `→ ${row.recipients_count ?? "?"} recipient(s)${
+                          row.numeric_violations || row.ranking_violations
+                            ? ` · violations: ${row.numeric_violations ?? 0} num, ${row.ranking_violations ?? 0} rank`
+                            : ""
+                        }`
+                      : row.status === "error"
+                      ? row.error_message ?? "(no message)"
+                      : ""}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        <button
+          onClick={fetchRecentSends}
+          className="mt-3 text-xs text-blue-600 hover:text-blue-700"
+        >
+          Refresh
+        </button>
       </div>
 
       {/* Price Data */}

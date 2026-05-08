@@ -8,9 +8,26 @@ import {
 } from "@/lib/email";
 import { fetchVitalKnowledge } from "@/lib/vital-knowledge";
 import { backfillPrices } from "@/lib/prices";
+import { refreshAllOpenPrices, NoOpenPositionsError } from "@/lib/prices-refresh";
 
 export async function POST() {
   try {
+    // Phase 7 (2026-05-08): preview must refresh prices too, otherwise the
+    // user reviews stale numbers in the preview's leaderboard/positions and
+    // then the actual send (via /api/email/weekly) refreshes and ships
+    // different numbers. Doing the same refresh here keeps preview and send
+    // visually consistent.
+    let priceFreshness: "fresh" | "stale" | "noop" = "noop";
+    try {
+      const refresh = await refreshAllOpenPrices();
+      priceFreshness = refresh.pricesAreFresh ? "fresh" : "stale";
+    } catch (err) {
+      if (!(err instanceof NoOpenPositionsError)) {
+        console.warn(`[Email Preview] Price refresh failed: ${err instanceof Error ? err.message : err}. Preview may show stale prices.`);
+        priceFreshness = "stale";
+      }
+    }
+
     // Backfill price history so "this week" calculations are accurate (90s timeout)
     try {
       await Promise.race([
@@ -45,10 +62,27 @@ export async function POST() {
     vkStatus.chars = marketContext?.length ?? 0;
     vkStatus.preview = marketContext ? marketContext.slice(0, 160) : "";
     console.log(`[Email Preview] VK market context: ${vkStatus.chars ? `${vkStatus.chars} chars` : vkStatus.credsConfigured ? "empty (fetch failed)" : "empty (no credentials)"}`);
-    const commentary = await generateCommentary(reportData, anthropicApiKey, aiModel, marketContext);
+    const { text: commentary, violations, factual, verifierErrors, attempts } = await generateCommentary(reportData, anthropicApiKey, aiModel, marketContext);
     const html = buildEmailHtml(reportData, commentary);
 
-    return NextResponse.json({ html, commentary, reportDate: reportData.reportDate, vk: vkStatus });
+    return NextResponse.json({
+      html,
+      commentary,
+      reportDate: reportData.reportDate,
+      vk: vkStatus,
+      priceFreshness,
+      violations: {
+        numeric: violations.numericViolations,
+        ranking: violations.rankingViolations,
+        missedTrades: factual.missedTrades.length,
+        unknownTickers: factual.unknownTickers.length,
+        verifierErrors: verifierErrors.length,
+        missedTradesDetail: factual.missedTrades,
+        unknownTickersDetail: factual.unknownTickers.map((u) => u.ticker),
+        verifierErrorDetail: verifierErrors,
+        attempts,
+      },
+    });
   } catch (err) {
     return NextResponse.json(
       {
