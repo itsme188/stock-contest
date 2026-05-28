@@ -51,7 +51,7 @@ npm run email:status    # Check if launchd job is loaded
 - `GET /api/prices?ticker=AAPL&date=2026-01-15` — Single ticker price fetch
 - `POST /api/prices/update` — Refresh all open ticker prices via Polygon (batch, rate-limited, returns `priceDates`)
 - `POST /api/prices/ibkr` — Refresh all open ticker prices via IBKR TWS (fallback, requires TWS running)
-- `POST /api/prices/backfill` — Bulk historical daily prices via Polygon range API
+- `POST /api/prices/backfill` — Bulk historical daily prices (IBKR primary, Polygon range-API fallback). Returns `{tickers, daysAdded, added}` where `added` is the per-ticker date→price map of newly inserted entries so callers can merge into local state without a page reload. Chained automatically after every refresh path: scheduled daily-refresh script, weekly email flow, AND the Dashboard "Refresh Prices" button (2026-05-28).
 - `POST /api/prices/benchmark` — S&P 500 (SPY) historical prices (IBKR primary, Polygon fallback)
 - `POST /api/email/preview` — Generate email preview (AI commentary + rendered HTML, no send)
 - `POST /api/email/weekly` — Weekly email report with AI commentary (accepts optional pre-generated commentary)
