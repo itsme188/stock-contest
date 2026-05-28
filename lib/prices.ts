@@ -10,13 +10,17 @@ import {
   WhatToShow,
 } from "@stoqey/ib";
 
+type PriceHistory = Record<string, Record<string, number>>;
+
 interface BackfillResult {
   tickers: number;
   daysAdded: number;
   errors: string[];
+  // Newly inserted entries only (per-ticker date->price). Dates that already
+  // had a price are NOT included. Consumers can merge this into their local
+  // priceHistory state without a full reload.
+  added: PriceHistory;
 }
-
-type PriceHistory = Record<string, Record<string, number>>;
 
 const TWS_PORT = 7496;
 const TWS_HOST = "127.0.0.1";
@@ -156,6 +160,7 @@ async function backfillViaIBKR(
 
     let daysAdded = 0;
     const errors: string[] = [];
+    const added: PriceHistory = {};
     let reqId = 1;
 
     for (const ticker of allTickers) {
@@ -166,6 +171,8 @@ async function backfillViaIBKR(
         for (const [date, price] of Object.entries(bars)) {
           if (!existing[date]) {
             existing[date] = price;
+            if (!added[ticker]) added[ticker] = {};
+            added[ticker][date] = price;
             daysAdded++;
           }
         }
@@ -180,7 +187,7 @@ async function backfillViaIBKR(
       }
     }
 
-    return { tickers: allTickers.length, daysAdded, errors };
+    return { tickers: allTickers.length, daysAdded, errors, added };
   } finally {
     try {
       ib.disconnect();
@@ -200,6 +207,7 @@ async function backfillViaPolygon(
   const to = localToday();
   let daysAdded = 0;
   const errors: string[] = [];
+  const added: PriceHistory = {};
 
   const BATCH_SIZE = 5;
   for (let i = 0; i < allTickers.length; i += BATCH_SIZE) {
@@ -244,6 +252,8 @@ async function backfillViaPolygon(
         for (const [date, price] of Object.entries(result.bars)) {
           if (!existing[date]) {
             existing[date] = price;
+            if (!added[result.ticker]) added[result.ticker] = {};
+            added[result.ticker][date] = price;
             daysAdded++;
           }
         }
@@ -251,7 +261,7 @@ async function backfillViaPolygon(
     }
   }
 
-  return { tickers: allTickers.length, daysAdded, errors };
+  return { tickers: allTickers.length, daysAdded, errors, added };
 }
 
 export async function backfillBenchmark(): Promise<BackfillResult> {
@@ -266,7 +276,7 @@ export async function backfillBenchmark(): Promise<BackfillResult> {
     result = await backfillViaIBKR(["SPY"], contestStartDate, priceHistory);
   } catch {
     if (!polygonApiKey) {
-      return { tickers: 0, daysAdded: 0, errors: ["No price source available (TWS not running, no Polygon API key)"] };
+      return { tickers: 0, daysAdded: 0, errors: ["No price source available (TWS not running, no Polygon API key)"], added: {} };
     }
     result = await backfillViaPolygon(["SPY"], contestStartDate, polygonApiKey, priceHistory);
   }
@@ -288,7 +298,7 @@ export async function backfillPrices(): Promise<BackfillResult> {
   const allTickers = [...new Set(trades.map((t) => t.ticker))].sort();
 
   if (allTickers.length === 0) {
-    return { tickers: 0, daysAdded: 0, errors: [] };
+    return { tickers: 0, daysAdded: 0, errors: [], added: {} };
   }
 
   const priceHistory = { ...contestData.priceHistory };
@@ -300,7 +310,7 @@ export async function backfillPrices(): Promise<BackfillResult> {
   } catch {
     // IBKR failed (TWS not running) — fall back to Polygon
     if (!polygonApiKey) {
-      return { tickers: 0, daysAdded: 0, errors: ["No price source available (TWS not running, no Polygon API key)"] };
+      return { tickers: 0, daysAdded: 0, errors: ["No price source available (TWS not running, no Polygon API key)"], added: {} };
     }
     result = await backfillViaPolygon(allTickers, contestStartDate, polygonApiKey, priceHistory);
   }

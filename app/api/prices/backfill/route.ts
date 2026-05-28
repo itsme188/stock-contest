@@ -13,6 +13,7 @@ export async function POST() {
       ok: true,
       tickers: result.tickers,
       daysAdded: result.daysAdded,
+      added: result.added,
       ...(result.errors.length > 0 && { errors: result.errors }),
     });
   } catch (err) {

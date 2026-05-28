@@ -96,6 +96,35 @@ export default function DashboardTab({
     }
   };
 
+  // Best-effort: fill in any missing historical days for held tickers since
+  // contest start. Without this, gaps appear as flat lines in the chart when
+  // the dashboard hasn't been refreshed in a while. Mirrors the chain already
+  // used by the scheduled daily-refresh script.
+  const fillHistoricalGaps = async (): Promise<string> => {
+    try {
+      const res = await fetch("/api/prices/backfill", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) return `backfill failed: ${data.error}`;
+
+      const added = (data.added ?? {}) as Record<string, Record<string, number>>;
+      const tickersTouched = Object.keys(added).length;
+      if (tickersTouched > 0) {
+        setPriceHistory((prev) => {
+          const next = { ...prev };
+          for (const [ticker, dates] of Object.entries(added)) {
+            next[ticker] = { ...(next[ticker] || {}), ...dates };
+          }
+          return next;
+        });
+      }
+      return data.daysAdded > 0
+        ? `filled ${data.daysAdded} missing day${data.daysAdded !== 1 ? "s" : ""} across ${tickersTouched} ticker${tickersTouched !== 1 ? "s" : ""}`
+        : "no gaps to fill";
+    } catch (err) {
+      return `backfill failed: ${err instanceof Error ? err.message : err}`;
+    }
+  };
+
   const refreshPrices = async (source: "polygon" | "ibkr") => {
     setRefreshing(true);
     setRefreshSource(source);
@@ -120,6 +149,12 @@ export default function DashboardTab({
         if (benchmarkStatus.startsWith("S&P 500 refresh error")) {
           setRefreshStatus((prev) => `${prev} — ${benchmarkStatus}`);
         }
+        // Fill historical gaps so the chart shows real daily data points
+        // instead of a flat line between refreshes. Best-effort: failures
+        // are appended to status but do not mark the refresh as failed.
+        setRefreshStatus((prev) => `${prev} — filling historical gaps...`);
+        const backfillStatus = await fillHistoricalGaps();
+        setRefreshStatus((prev) => `${prev.replace(" — filling historical gaps...", "")} — ${backfillStatus}`);
       } else {
         setRefreshStatus(`Error: ${data.error}`);
       }
