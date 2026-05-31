@@ -11,59 +11,19 @@
         <string>/Users/Yitzi/Library/Application Support/stock-contest/scripts/daily-refresh.sh</string>
     </array>
 
-    <key>StartCalendarInterval</key>
-    <array>
-        <dict>
-            <key>Weekday</key><integer>1</integer>
-            <key>Hour</key><integer>9</integer>
-            <key>Minute</key><integer>31</integer>
-        </dict>
-        <dict>
-            <key>Weekday</key><integer>2</integer>
-            <key>Hour</key><integer>9</integer>
-            <key>Minute</key><integer>31</integer>
-        </dict>
-        <dict>
-            <key>Weekday</key><integer>3</integer>
-            <key>Hour</key><integer>9</integer>
-            <key>Minute</key><integer>31</integer>
-        </dict>
-        <dict>
-            <key>Weekday</key><integer>4</integer>
-            <key>Hour</key><integer>9</integer>
-            <key>Minute</key><integer>31</integer>
-        </dict>
-        <dict>
-            <key>Weekday</key><integer>5</integer>
-            <key>Hour</key><integer>9</integer>
-            <key>Minute</key><integer>31</integer>
-        </dict>
-        <dict>
-            <key>Weekday</key><integer>1</integer>
-            <key>Hour</key><integer>16</integer>
-            <key>Minute</key><integer>20</integer>
-        </dict>
-        <dict>
-            <key>Weekday</key><integer>2</integer>
-            <key>Hour</key><integer>16</integer>
-            <key>Minute</key><integer>20</integer>
-        </dict>
-        <dict>
-            <key>Weekday</key><integer>3</integer>
-            <key>Hour</key><integer>16</integer>
-            <key>Minute</key><integer>20</integer>
-        </dict>
-        <dict>
-            <key>Weekday</key><integer>4</integer>
-            <key>Hour</key><integer>16</integer>
-            <key>Minute</key><integer>20</integer>
-        </dict>
-        <dict>
-            <key>Weekday</key><integer>5</integer>
-            <key>Hour</key><integer>16</integer>
-            <key>Minute</key><integer>20</integer>
-        </dict>
-    </array>
+    <!--
+      Drift-proof scheduling: poll every 5 minutes and let daily-refresh.sh decide
+      whether it is inside a refresh slot (weekday AM >=09:31, PM >=16:20, once per
+      slot per day). We deliberately do NOT use StartCalendarInterval: on this laptop,
+      sleep-deferred calendar fires get re-anchored by macOS UserEventAgent and drift
+      to the wrong time (the slots had drifted to ~02:31 AM / 09:20 AM). StartInterval
+      has no calendar anchor to drift; out-of-window polls exit in milliseconds.
+    -->
+    <key>StartInterval</key>
+    <integer>300</integer>
+
+    <key>RunAtLoad</key>
+    <true/>
 
     <key>StandardOutPath</key>
     <string>/Users/Yitzi/Library/Application Support/stock-contest/logs/launchd-daily-refresh-stdout.log</string>
@@ -72,6 +32,6 @@
     <string>/Users/Yitzi/Library/Application Support/stock-contest/logs/launchd-daily-refresh-stderr.log</string>
 
     <key>ProcessType</key>
-    <string>Background</string>
+    <string>Standard</string>
 </dict>
 </plist>

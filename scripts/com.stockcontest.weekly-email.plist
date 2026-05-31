@@ -11,15 +11,19 @@
         <string>/Users/Yitzi/Library/Application Support/stock-contest/scripts/weekly-email.sh</string>
     </array>
 
-    <key>StartCalendarInterval</key>
-    <dict>
-        <key>Weekday</key>
-        <integer>5</integer>
-        <key>Hour</key>
-        <integer>16</integer>
-        <key>Minute</key>
-        <integer>45</integer>
-    </dict>
+    <!--
+      Drift-proof scheduling: poll every 5 minutes and let weekly-email.sh decide
+      whether it is inside the send window (Friday >=16:45 .. Sun, once per ISO week).
+      We deliberately do NOT use StartCalendarInterval: on this laptop, sleep-deferred
+      calendar fires get re-anchored by macOS UserEventAgent and drift to the wrong
+      time (they had crept to ~9:45 AM). StartInterval has no calendar anchor to drift;
+      non-window polls exit in milliseconds via the script's guard.
+    -->
+    <key>StartInterval</key>
+    <integer>300</integer>
+
+    <key>RunAtLoad</key>
+    <true/>
 
     <key>StandardOutPath</key>
     <string>/Users/Yitzi/Library/Application Support/stock-contest/logs/launchd-weekly-email-stdout.log</string>
@@ -28,6 +32,6 @@
     <string>/Users/Yitzi/Library/Application Support/stock-contest/logs/launchd-weekly-email-stderr.log</string>
 
     <key>ProcessType</key>
-    <string>Background</string>
+    <string>Standard</string>
 </dict>
 </plist>

@@ -1,6 +1,10 @@
 #!/bin/bash
-# weekly-email.sh — Refresh prices then send weekly contest email
-# Called by launchd every Friday at 4:45 PM
+# weekly-email.sh — Refresh prices then send weekly contest email.
+# launchd polls this script frequently (StartInterval, see the .plist); the
+# scheduling guard below decides when to actually run. We do NOT use
+# StartCalendarInterval: on this laptop, sleep-deferred calendar fires get
+# re-anchored by macOS UserEventAgent and drift to the wrong time (they had
+# crept to ~9:45 AM). A frequent poll + script-owned window cannot drift.
 
 set -euo pipefail
 
@@ -9,6 +13,7 @@ BASE_URL="http://localhost:3001"
 # touching files there. ~/Library/Application Support/ is non-protected.
 LOG_DIR="$HOME/Library/Application Support/stock-contest/logs"
 LOG_FILE="${LOG_DIR}/weekly-email.log"
+SENT_MARKER="${LOG_DIR}/.weekly-email-last-sent"  # ISO year-week of last successful send (drift-proof guard)
 PRICE_TIMEOUT=300
 EMAIL_TIMEOUT=120
 SLEEP_AFTER_PRICES=5
@@ -21,11 +26,25 @@ log() {
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
 }
 
+# Fire an osascript notification at most once per calendar day per key. The
+# script is polled every few minutes, so an unthrottled alert on a persistent
+# failure would spam Notification Center hundreds of times; this caps it to one.
+notify_throttled() {
+  local key="$1" title="$2" subtitle="$3" message="$4"
+  local stamp="${LOG_DIR}/.notify-${key}"
+  local today; today=$(date +%F)
+  if [ -f "$stamp" ] && [ "$(cat "$stamp" 2>/dev/null)" = "$today" ]; then
+    return 0  # already alerted today for this key
+  fi
+  echo "$today" > "$stamp"
+  osascript -e "display notification \"$message\" with title \"$title\" subtitle \"$subtitle\"" 2>/dev/null || true
+}
+
 notify_failure() {
   local reason="$1"
   log "ERROR: $reason"
   log "=== Job failed ==="
-  osascript -e "display notification \"$reason\" with title \"Stock Contest\" subtitle \"Weekly Email Failed\"" 2>/dev/null || true
+  notify_throttled "weekly-email-failed" "Stock Contest" "Weekly Email Failed" "$reason"
   exit 1
 }
 
@@ -58,6 +77,32 @@ else:
 
   [ "$stale_count" = "0" ]
 }
+
+# --- Drift-proof scheduling guard ---------------------------------------------
+# Send window: Friday on/after 16:45 local time, through the end of the ISO week
+# (Saturday/Sunday), at most once per ISO week. Sat/Sun are included so that a
+# Friday-evening miss (e.g. Mac asleep) still goes out on the next wake instead
+# of skipping the week entirely. Mon-Thu and pre-16:45 Friday exit silently so
+# the frequent poll leaves no log noise and does no expensive work.
+NOW_DOW=$(date +%u)          # 1=Mon .. 7=Sun
+NOW_HHMM=$(date +%H%M)       # zero-padded HHMM, e.g. 1645
+NOW_WEEK=$(date +%G-W%V)     # ISO year-week, e.g. 2026-W22
+
+in_window=0
+if [ "$NOW_DOW" -eq 5 ] && [ "$NOW_HHMM" -ge 1645 ]; then
+  in_window=1                # Friday, on/after 16:45
+elif [ "$NOW_DOW" -ge 6 ]; then
+  in_window=1                # Saturday or Sunday — catch-up for a missed Friday
+fi
+
+if [ "$in_window" -ne 1 ]; then
+  exit 0                     # before Fri 16:45, or Mon-Thu (not due yet)
+fi
+
+if [ -f "$SENT_MARKER" ] && [ "$(cat "$SENT_MARKER" 2>/dev/null)" = "$NOW_WEEK" ]; then
+  exit 0                     # already sent this ISO week
+fi
+# --- end scheduling guard -----------------------------------------------------
 
 log "=== Weekly email job started ==="
 
@@ -164,9 +209,11 @@ EMAIL_RESPONSE=$(curl -sf --max-time "$EMAIL_TIMEOUT" \
 log "Email response: ${EMAIL_RESPONSE}"
 
 if echo "$EMAIL_RESPONSE" | grep -q '"skipped":true'; then
-  log "=== Skipped: email already sent today (manual send detected) ==="
+  echo "$NOW_WEEK" > "$SENT_MARKER"
+  log "=== Skipped: email already sent today (manual send detected); week ${NOW_WEEK} marked ==="
 elif echo "$EMAIL_RESPONSE" | grep -q '"ok":true'; then
-  log "=== Weekly email sent successfully ==="
+  echo "$NOW_WEEK" > "$SENT_MARKER"
+  log "=== Weekly email sent successfully; week ${NOW_WEEK} marked ==="
 else
   notify_failure "Email returned unexpected response"
 fi
