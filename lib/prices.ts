@@ -1,6 +1,7 @@
 import { getContestData, saveContestData } from "@/lib/db";
 import { type Trade, BENCHMARK_KEY } from "@/lib/contest";
 import { localToday, parseLocalDate, formatLocalYMD } from "@/lib/dates";
+import { withPriceLock } from "@/lib/price-lock";
 import {
   IBApi,
   EventName,
@@ -129,7 +130,18 @@ function fetchHistoricalBars(
   });
 }
 
-async function backfillViaIBKR(
+function backfillViaIBKR(
+  allTickers: string[],
+  contestStartDate: string,
+  priceHistory: PriceHistory
+): Promise<BackfillResult> {
+  // Serialized: holds IBKR client id 2 for the whole fetch (see lib/price-lock).
+  return withPriceLock(() =>
+    backfillViaIBKRImpl(allTickers, contestStartDate, priceHistory)
+  );
+}
+
+async function backfillViaIBKRImpl(
   allTickers: string[],
   contestStartDate: string,
   priceHistory: PriceHistory
@@ -214,7 +226,19 @@ function mostRecentTradingDay(): string {
   return formatLocalYMD(d);
 }
 
-async function backfillViaPolygon(
+function backfillViaPolygon(
+  allTickers: string[],
+  contestStartDate: string,
+  polygonApiKey: string,
+  priceHistory: PriceHistory
+): Promise<BackfillResult> {
+  // Serialized: paces against the shared Polygon quota (see lib/price-lock).
+  return withPriceLock(() =>
+    backfillViaPolygonImpl(allTickers, contestStartDate, polygonApiKey, priceHistory)
+  );
+}
+
+async function backfillViaPolygonImpl(
   allTickers: string[],
   contestStartDate: string,
   polygonApiKey: string,

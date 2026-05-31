@@ -13,6 +13,7 @@
 import { getContestData, saveContestData } from "@/lib/db";
 import { type Player, type Trade, getPlayerPositions } from "@/lib/contest";
 import { localToday } from "@/lib/dates";
+import { withPriceLock } from "@/lib/price-lock";
 import {
   IBApi,
   EventName,
@@ -180,7 +181,12 @@ function fetchIbkrClosingPrice(
   });
 }
 
-export async function refreshIbkrPrices(): Promise<RefreshResult> {
+export function refreshIbkrPrices(): Promise<RefreshResult> {
+  // Serialized: holds IBKR client id 2 for the whole fetch (see lib/price-lock).
+  return withPriceLock(refreshIbkrPricesImpl);
+}
+
+async function refreshIbkrPricesImpl(): Promise<RefreshResult> {
   const openTickers = getOpenTickers();
   if (openTickers.length === 0) throw new NoOpenPositionsError();
 
@@ -257,7 +263,12 @@ export async function refreshIbkrPrices(): Promise<RefreshResult> {
 
 // ---------- Polygon ----------
 
-export async function refreshPolygonPrices(): Promise<RefreshResult> {
+export function refreshPolygonPrices(): Promise<RefreshResult> {
+  // Serialized: paces against the shared Polygon quota (see lib/price-lock).
+  return withPriceLock(refreshPolygonPricesImpl);
+}
+
+async function refreshPolygonPricesImpl(): Promise<RefreshResult> {
   const contestData = getContestData();
   const { polygonApiKey } = contestData;
   if (!polygonApiKey) {
