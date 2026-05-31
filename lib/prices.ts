@@ -1,6 +1,6 @@
 import { getContestData, saveContestData } from "@/lib/db";
 import { type Trade, BENCHMARK_KEY } from "@/lib/contest";
-import { localToday } from "@/lib/dates";
+import { localToday, parseLocalDate, formatLocalYMD } from "@/lib/dates";
 import {
   IBApi,
   EventName,
@@ -28,6 +28,11 @@ const CLIENT_ID = 2;
 const CONNECT_TIMEOUT_MS = 5000;
 const REQUEST_TIMEOUT_MS = 15000;
 const PACE_DELAY_MS = 2000;
+// Polygon free tier allows 5 calls/min. The backfill fallback must pace to match
+// (same as lib/prices-refresh.ts) or every batch after the first gets rejected
+// with "exceeded the maximum requests per minute".
+const POLYGON_BATCH_SIZE = 5;
+const POLYGON_BATCH_DELAY_MS = 61000;
 
 // Exchange suffix -> IBKR primaryExchange + currency
 const EXCHANGE_MAP: Record<string, { primaryExchange: string; currency: string }> = {
@@ -197,6 +202,18 @@ async function backfillViaIBKR(
   }
 }
 
+// Most recent weekday (today if a weekday, else the prior Friday). Used to skip
+// tickers that are already current so the rate-limited Polygon fallback only
+// fetches genuine laggards. Holidays aren't modeled — at worst a holiday triggers
+// a redundant fetch, which the date-level dedup below makes harmless.
+function mostRecentTradingDay(): string {
+  const d = parseLocalDate(localToday());
+  const dow = d.getDay(); // 0=Sun .. 6=Sat
+  if (dow === 0) d.setDate(d.getDate() - 2);
+  else if (dow === 6) d.setDate(d.getDate() - 1);
+  return formatLocalYMD(d);
+}
+
 async function backfillViaPolygon(
   allTickers: string[],
   contestStartDate: string,
@@ -209,13 +226,23 @@ async function backfillViaPolygon(
   const errors: string[] = [];
   const added: PriceHistory = {};
 
-  const BATCH_SIZE = 5;
-  for (let i = 0; i < allTickers.length; i += BATCH_SIZE) {
+  // Only fetch tickers that are actually behind. On the free tier (5 calls/min)
+  // fetching all ~30 tickers every run guarantees rate-limit rejections, so skip
+  // any ticker that already has the most recent trading day's close. In the
+  // common case this fetches nothing (instant); it only does real work when TWS
+  // was unavailable (e.g. a mobile Friday with the desktop logged out of IBKR).
+  const target = mostRecentTradingDay();
+  const tickersToFetch = allTickers.filter((t) => !priceHistory[t]?.[target]);
+  if (tickersToFetch.length === 0) {
+    return { tickers: allTickers.length, daysAdded: 0, errors, added };
+  }
+
+  for (let i = 0; i < tickersToFetch.length; i += POLYGON_BATCH_SIZE) {
     if (i > 0) {
-      await new Promise((resolve) => setTimeout(resolve, 12500));
+      await new Promise((resolve) => setTimeout(resolve, POLYGON_BATCH_DELAY_MS));
     }
 
-    const batch = allTickers.slice(i, i + BATCH_SIZE);
+    const batch = tickersToFetch.slice(i, i + POLYGON_BATCH_SIZE);
     const results = await Promise.all(
       batch.map(async (ticker) => {
         try {

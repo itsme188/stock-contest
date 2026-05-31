@@ -18,8 +18,10 @@ AM_MARKER="${LOG_DIR}/.daily-refresh-am-last"   # YYYY-MM-DD of last completed m
 PM_MARKER="${LOG_DIR}/.daily-refresh-pm-last"   # YYYY-MM-DD of last completed afternoon run
 HEALTH_TIMEOUT=5
 IBKR_TIMEOUT=60
-POLYGON_TIMEOUT=300
-BACKFILL_TIMEOUT=300
+# 600s (not 300): a full Polygon fallback (TWS logged out, e.g. mobile Friday)
+# paces ~30 tickers at 5 calls/min, which can take ~6 min for refresh/backfill.
+POLYGON_TIMEOUT=600
+BACKFILL_TIMEOUT=600
 
 # Slot windows (local time, HHMM): morning refresh after the 09:30 open,
 # afternoon refresh after the 16:00 close.

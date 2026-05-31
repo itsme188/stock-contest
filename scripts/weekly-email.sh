@@ -14,7 +14,9 @@ BASE_URL="http://localhost:3001"
 LOG_DIR="$HOME/Library/Application Support/stock-contest/logs"
 LOG_FILE="${LOG_DIR}/weekly-email.log"
 SENT_MARKER="${LOG_DIR}/.weekly-email-last-sent"  # ISO year-week of last successful send (drift-proof guard)
-PRICE_TIMEOUT=300
+# 600s (not 300): a full Polygon fallback (TWS logged out, e.g. mobile Friday)
+# paces ~30 tickers at 5 calls/min, which can take ~6 min per refresh/backfill.
+PRICE_TIMEOUT=600
 EMAIL_TIMEOUT=120
 SLEEP_AFTER_PRICES=5
 RETRY_DELAY=300  # 5 minutes between retries
