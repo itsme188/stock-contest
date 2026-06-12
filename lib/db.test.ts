@@ -14,6 +14,10 @@ import {
   addAuditEntry,
   getAuditLog,
   checkDbIntegrity,
+  recordEmailSend,
+  listRecentEmailSends,
+  updateEmailSend,
+  findBlockingWeeklySend,
 } from "@/lib/db";
 import { type Trade } from "@/lib/contest";
 
@@ -444,5 +448,66 @@ describe("checkDbIntegrity", () => {
 
   it("returns true for healthy database", () => {
     expect(checkDbIntegrity()).toBe(true);
+  });
+});
+
+// --- Pending Email Sends ---
+
+describe("pending email sends", () => {
+  beforeEach(() => freshDb());
+
+  it("recordEmailSend returns the inserted row id", () => {
+    const id = recordEmailSend({ kind: "weekly", status: "pending", reportDate: "2026-06-12" });
+    expect(id).toBeGreaterThan(0);
+  });
+
+  it("updateEmailSend updates status and preserves unset fields", () => {
+    const id = recordEmailSend({
+      kind: "weekly", status: "pending", reportDate: "2026-06-12", recipients: 3,
+    });
+    updateEmailSend(id, { status: "ok", numericViolations: 0, rankingViolations: 1 });
+    const rows = listRecentEmailSends(5);
+    const row = rows.find((r) => r.id === id)!;
+    expect(row.status).toBe("ok");
+    expect(row.recipients_count).toBe(3); // preserved
+    expect(row.ranking_violations).toBe(1);
+    expect(row.numeric_violations).toBe(0);
+  });
+
+  it("findBlockingWeeklySend returns ok rows for the date regardless of age", () => {
+    recordEmailSend({ kind: "weekly", status: "ok", reportDate: "2026-06-12" });
+    const row = findBlockingWeeklySend("2026-06-12", Date.now() + 1000);
+    expect(row?.status).toBe("ok");
+  });
+
+  it("findBlockingWeeklySend returns recent pending rows but not stale ones", () => {
+    const id = recordEmailSend({ kind: "weekly", status: "pending", reportDate: "2026-06-12" });
+    expect(findBlockingWeeklySend("2026-06-12", Date.now() - 60_000)?.id).toBe(id);
+    // pendingSince in the future = row is older than the window
+    expect(findBlockingWeeklySend("2026-06-12", Date.now() + 60_000)).toBeUndefined();
+  });
+
+  it("findBlockingWeeklySend ignores error/skipped rows and other dates", () => {
+    recordEmailSend({ kind: "weekly", status: "error", reportDate: "2026-06-12" });
+    recordEmailSend({ kind: "weekly", status: "skipped", reportDate: "2026-06-12" });
+    recordEmailSend({ kind: "weekly", status: "ok", reportDate: "2026-06-05" });
+    expect(findBlockingWeeklySend("2026-06-12", 0)).toBeUndefined();
+  });
+
+  it("test-send rows never block a real send", () => {
+    recordEmailSend({ kind: "weekly", status: "test", reportDate: "2026-06-12", recipients: 1 });
+    expect(findBlockingWeeklySend("2026-06-12", 0)).toBeUndefined();
+  });
+
+  it("updateEmailSend transitions pending to error with a message", () => {
+    const id = recordEmailSend({ kind: "weekly", status: "pending", reportDate: "2026-06-12" });
+    updateEmailSend(id, { status: "error", errorMessage: "SMTP send failed: boom" });
+    const row = listRecentEmailSends(5).find((r) => r.id === id)!;
+    expect(row.status).toBe("error");
+    expect(row.error_message).toBe("SMTP send failed: boom");
+  });
+
+  it("updateEmailSend throws on unknown id", () => {
+    expect(() => updateEmailSend(999999, { status: "ok" })).toThrow(/no email_sends row/);
   });
 });

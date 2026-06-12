@@ -55,14 +55,24 @@ export default function DashboardTab({
 
   const hasBenchmark = !!(priceHistory[BENCHMARK_KEY] && Object.keys(priceHistory[BENCHMARK_KEY]).length > 0);
 
-  const applyPriceUpdate = (data: { updated: Record<string, number>; date: string; errors?: string[] }, source: string) => {
+  const applyPriceUpdate = (
+    data: {
+      updated: Record<string, number>;
+      date: string;
+      priceDates?: Record<string, string>;
+      errors?: string[];
+    },
+    source: string
+  ) => {
     setCurrentPrices((prev) => ({ ...prev, ...data.updated }));
-    const today = data.date;
     setPriceHistory((prev) => {
       const next = { ...prev };
       for (const [ticker, price] of Object.entries(data.updated)) {
+        // Mirror the server: key by the bar's real date so a prior-session
+        // close never lands under today's key (debounced PUT persists this).
+        const barDate = data.priceDates?.[ticker] ?? data.date;
         if (!next[ticker]) next[ticker] = {};
-        next[ticker] = { ...next[ticker], [today]: price };
+        next[ticker] = { ...next[ticker], [barDate]: price };
       }
       return next;
     });
@@ -143,6 +153,18 @@ export default function DashboardTab({
       const data = await res.json();
       if (res.ok) {
         applyPriceUpdate(data, source === "ibkr" ? "IBKR TWS" : "Polygon");
+        const staleBars = Object.entries(
+          (data.priceDates ?? {}) as Record<string, string>
+        ).filter(([, d]) => d !== data.date);
+        if (staleBars.length > 0) {
+          console.log(
+            `[refresh] prior-session bars: ${staleBars.map(([t, d]) => `${t}=${d}`).join(", ")}`
+          );
+          setRefreshStatus(
+            (prev) =>
+              `${prev} — note: ${staleBars.length} ticker${staleBars.length === 1 ? "" : "s"} returned prior-session closes (stored under their own dates; retry after ~4:20 PM ET)`
+          );
+        }
         // Keep the S&P 500 comparison line in sync with held-ticker prices.
         // Runs sequentially because the IBKR path shares client ID 2.
         const benchmarkStatus = await fetchBenchmark();

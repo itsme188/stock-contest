@@ -1,4 +1,4 @@
-import { formatLocalYMD, localToday, parseLocalDate } from "./dates";
+import { addDays, localToday } from "./dates";
 
 // --- Types ---
 
@@ -67,11 +67,18 @@ export interface PlayerStats {
 
 export type LeaderboardEntry = Player & PlayerStats;
 
+export interface DailyValuePoint {
+  date: string;
+  value: number;
+}
+
 // --- Constants ---
 
 export const COLORS = ["#3B82F6", "#10B981", "#F59E0B", "#EF4444", "#8B5CF6"];
 export const STARTING_CASH = 100000;
 export const DEFAULT_POSITION_SIZE = 20000;
+export const BENCHMARK_KEY = "__BENCHMARK_SPY";
+export const DEFAULT_CONTEST_START_DATE = "2026-01-01";
 
 // --- Position Logic ---
 
@@ -419,6 +426,36 @@ export function getPlayerValueAtDate(
   return cashRemaining + portfolioValue;
 }
 
+// Daily time series of a player's total portfolio value (cash + positions
+// at historical prices). One point per date that appears in the player's
+// trades or anywhere in priceHistory, restricted to [contestStartDate,
+// today]. This is the single source for every series-derived statistic
+// (Sharpe, drawdown, volatility, Sortino, alpha/beta).
+// Per-ticker gaps carry the nearest PRIOR price forward (no interpolation).
+export function buildDailyValueSeries(
+  playerId: string,
+  trades: Trade[],
+  priceHistory: Record<string, Record<string, number>>,
+  contestStartDate: string,
+  today?: string
+): DailyValuePoint[] {
+  const resolvedToday = today || localToday();
+  const dateSet = new Set<string>();
+  trades
+    .filter((t) => t.playerId === playerId)
+    .forEach((t) => dateSet.add(t.date));
+  Object.values(priceHistory).forEach((history) => {
+    Object.keys(history).forEach((d) => dateSet.add(d));
+  });
+  return [...dateSet]
+    .filter((d) => d >= contestStartDate && d <= resolvedToday)
+    .sort()
+    .map((date) => ({
+      date,
+      value: getPlayerValueAtDate(playerId, date, trades, priceHistory),
+    }));
+}
+
 // Annualized Sharpe ratio computed from the daily time series of total
 // portfolio value. Because players have no cash flows after the initial
 // STARTING_CASH deposit, day-over-day portfolio-value returns are a clean
@@ -432,31 +469,18 @@ export function getPlayerSharpeRatio(
   options?: { annualRiskFreeRate?: number; today?: string }
 ): number | null {
   const annualRF = options?.annualRiskFreeRate ?? 0;
-  const today = options?.today || localToday();
   const dailyRF = annualRF / 252;
 
-  const dateSet = new Set<string>();
-  trades
-    .filter((t) => t.playerId === playerId)
-    .forEach((t) => dateSet.add(t.date));
-  Object.values(priceHistory).forEach((history) => {
-    Object.keys(history).forEach((d) => dateSet.add(d));
-  });
-
-  const dates = [...dateSet]
-    .filter((d) => d >= contestStartDate && d <= today)
-    .sort();
-  if (dates.length < 2) return null;
-
-  const values = dates.map((d) =>
-    getPlayerValueAtDate(playerId, d, trades, priceHistory)
+  const series = buildDailyValueSeries(
+    playerId, trades, priceHistory, contestStartDate, options?.today
   );
+  if (series.length < 2) return null;
 
   const excessReturns: number[] = [];
-  for (let i = 1; i < values.length; i++) {
-    const prev = values[i - 1];
+  for (let i = 1; i < series.length; i++) {
+    const prev = series[i - 1].value;
     if (prev <= 0) continue;
-    const r = (values[i] - prev) / prev;
+    const r = (series[i].value - prev) / prev;
     excessReturns.push(r - dailyRF);
   }
   if (excessReturns.length < 2) return null;
@@ -470,6 +494,162 @@ export function getPlayerSharpeRatio(
   if (stdev === 0) return null;
 
   return (mean / stdev) * Math.sqrt(252);
+}
+
+export interface AdvancedStats {
+  maxDrawdownPct: number | null;        // peak-to-trough, negative %
+  maxDrawdownPeakDate: string | null;
+  maxDrawdownTroughDate: string | null;
+  annualizedVolatilityPct: number | null;
+  sortino: number | null;
+  beta: number | null;                  // vs __BENCHMARK_SPY daily returns
+  alphaAnnualizedPct: number | null;    // Jensen's alpha: annualized OLS intercept on excess returns, in %
+  payoffRatio: number | null;           // avg win $ / |avg loss $|
+  avgWinPct: number | null;
+  avgLossPct: number | null;
+}
+
+// Minimum matched player/benchmark daily-return pairs before alpha/beta are
+// reported. Below this the regression is noise, so we show "—" instead.
+const MIN_BENCHMARK_OBSERVATIONS = 20;
+
+export function getAdvancedStats(
+  playerId: string,
+  trades: Trade[],
+  priceHistory: Record<string, Record<string, number>>,
+  contestStartDate: string,
+  options?: { today?: string; annualRiskFreeRate?: number }
+): AdvancedStats {
+  const annualRF = options?.annualRiskFreeRate ?? 0;
+  const dailyRF = annualRF / 252;
+  const series = buildDailyValueSeries(
+    playerId, trades, priceHistory, contestStartDate, options?.today
+  );
+
+  // --- Max drawdown (running-peak scan) ---
+  let maxDrawdownPct: number | null = null;
+  let maxDrawdownPeakDate: string | null = null;
+  let maxDrawdownTroughDate: string | null = null;
+  if (series.length >= 2) {
+    let peak = series[0];
+    let worst = 0;
+    let worstPeak: DailyValuePoint | null = null;
+    let worstTrough: DailyValuePoint | null = null;
+    for (const point of series) {
+      if (point.value > peak.value) peak = point;
+      if (peak.value > 0) {
+        const dd = ((point.value - peak.value) / peak.value) * 100;
+        if (dd < worst) {
+          worst = dd;
+          worstPeak = peak;
+          worstTrough = point;
+        }
+      }
+    }
+    maxDrawdownPct = worst;
+    maxDrawdownPeakDate = worstPeak?.date ?? null;
+    maxDrawdownTroughDate = worstTrough?.date ?? null;
+  }
+
+  // --- Daily returns between consecutive series points. NOTE: consecutive
+  // points may span calendar gaps, and a ticker missing a date carries its
+  // prior price forward — both smooth the series slightly (volatility is a
+  // floor, beta attenuates toward 0 when player tickers lag the benchmark
+  // calendar). Acceptable for contest stats; never interpolated.
+  const dailyReturns: number[] = [];
+  for (let i = 1; i < series.length; i++) {
+    const prev = series[i - 1].value;
+    if (prev <= 0) continue;
+    dailyReturns.push((series[i].value - prev) / prev);
+  }
+
+  // --- Annualized volatility ---
+  let annualizedVolatilityPct: number | null = null;
+  if (dailyReturns.length >= 2) {
+    const mean = dailyReturns.reduce((s, r) => s + r, 0) / dailyReturns.length;
+    const variance =
+      dailyReturns.reduce((s, r) => s + (r - mean) ** 2, 0) /
+      (dailyReturns.length - 1);
+    annualizedVolatilityPct = Math.sqrt(variance) * Math.sqrt(252) * 100;
+  }
+
+  // --- Sortino (downside deviation, full-n denominator) ---
+  let sortino: number | null = null;
+  if (dailyReturns.length >= 2) {
+    const excess = dailyReturns.map((r) => r - dailyRF);
+    const downside = excess.filter((r) => r < 0);
+    // ≥2 downside obs: a single losing day makes downside deviation pure noise.
+    if (downside.length >= 2) {
+      const meanExcess = excess.reduce((s, r) => s + r, 0) / excess.length;
+      const downsideDev = Math.sqrt(
+        downside.reduce((s, r) => s + r ** 2, 0) / excess.length
+      );
+      if (downsideDev > 0) sortino = (meanExcess / downsideDev) * Math.sqrt(252);
+    }
+  }
+
+  // --- Alpha / beta vs SPY (common dates only — never interpolate) ---
+  let beta: number | null = null;
+  let alphaAnnualizedPct: number | null = null;
+  const benchmark = priceHistory[BENCHMARK_KEY];
+  if (benchmark) {
+    const aligned = series.filter((p) => benchmark[p.date] != null);
+    const playerR: number[] = [];
+    const benchR: number[] = [];
+    for (let i = 1; i < aligned.length; i++) {
+      const prevP = aligned[i - 1].value;
+      const prevB = benchmark[aligned[i - 1].date];
+      const curB = benchmark[aligned[i].date];
+      if (prevP <= 0 || prevB <= 0) continue;
+      playerR.push((aligned[i].value - prevP) / prevP - dailyRF);
+      benchR.push((curB - prevB) / prevB - dailyRF);
+    }
+    if (playerR.length >= MIN_BENCHMARK_OBSERVATIONS) {
+      const meanP = playerR.reduce((s, r) => s + r, 0) / playerR.length;
+      const meanB = benchR.reduce((s, r) => s + r, 0) / benchR.length;
+      let cov = 0;
+      let varB = 0;
+      for (let i = 0; i < playerR.length; i++) {
+        cov += (playerR[i] - meanP) * (benchR[i] - meanB);
+        varB += (benchR[i] - meanB) ** 2;
+      }
+      cov /= playerR.length - 1;
+      varB /= playerR.length - 1;
+      if (varB > 0) {
+        beta = cov / varB;
+        alphaAnnualizedPct = (meanP - beta * meanB) * 252 * 100;
+      }
+    }
+  }
+
+  // --- Payoff ratio / avg win / avg loss (FIFO closed trades) ---
+  const { closedTrades } = getPlayerStats(playerId, trades, {});
+  const wins = closedTrades.filter((t) => t.gain > 0);
+  const losses = closedTrades.filter((t) => t.gain < 0);
+  const avgWinPct = wins.length
+    ? wins.reduce((s, t) => s + t.gainPct, 0) / wins.length
+    : null;
+  const avgLossPct = losses.length
+    ? losses.reduce((s, t) => s + t.gainPct, 0) / losses.length
+    : null;
+  const payoffRatio =
+    wins.length && losses.length
+      ? (wins.reduce((s, t) => s + t.gain, 0) / wins.length) /
+        Math.abs(losses.reduce((s, t) => s + t.gain, 0) / losses.length)
+      : null;
+
+  return {
+    maxDrawdownPct,
+    maxDrawdownPeakDate,
+    maxDrawdownTroughDate,
+    annualizedVolatilityPct,
+    sortino,
+    beta,
+    alphaAnnualizedPct,
+    payoffRatio,
+    avgWinPct,
+    avgLossPct,
+  };
 }
 
 export function getPerformanceChartData(
@@ -611,26 +791,16 @@ export function getPeriodStartDate(
   contestStartDate: string,
   today?: string
 ): string {
-  const t = today ? parseLocalDate(today) : new Date();
+  const t = today || localToday();
   switch (period) {
-    case "1D": {
-      const d = new Date(t);
-      d.setDate(d.getDate() - 1);
-      return formatLocalYMD(d);
-    }
-    case "1W": {
-      const d = new Date(t);
-      d.setDate(d.getDate() - 7);
-      return formatLocalYMD(d);
-    }
-    case "1M": {
-      const d = new Date(t);
-      d.setDate(d.getDate() - 30);
-      return formatLocalYMD(d);
-    }
-    case "YTD": {
-      return `${t.getFullYear()}-01-01`;
-    }
+    case "1D":
+      return addDays(t, -1);
+    case "1W":
+      return addDays(t, -7);
+    case "1M":
+      return addDays(t, -30);
+    case "YTD":
+      return `${t.slice(0, 4)}-01-01`;
     case "ALL":
       return contestStartDate;
   }
@@ -684,8 +854,9 @@ export function getPositionDailyChange(
   const history = priceHistory[ticker];
   if (!history) return null;
 
-  // Price refresh routes store today's price under today's date, so we must
-  // exclude any entry >= today when looking for the "previous close".
+  // Refresh writes each bar under its real session date (today only when the
+  // bar IS today's), so excluding entries >= today reliably yields the prior
+  // session's close.
   const resolvedToday = today || localToday();
   const previousDates = Object.keys(history)
     .filter((d) => d < resolvedToday)
@@ -725,8 +896,6 @@ export function getPositionDaysHeld(position: Position, today?: string): number 
 }
 
 // --- Benchmark ---
-
-export const BENCHMARK_KEY = "__BENCHMARK_SPY";
 
 export function getBenchmarkReturnAtDate(
   date: string,
@@ -774,10 +943,9 @@ export function getPriceStaleness(
 
   if (!oldestLatest) return { stale: true, latestDate: null, daysOld: Infinity };
 
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const latestMs = new Date(oldestLatest).getTime();
-  const daysOld = Math.floor((today.getTime() - latestMs) / 86400000);
+  const daysOld = Math.floor(
+    (Date.parse(localToday() + "T00:00:00Z") - Date.parse(oldestLatest + "T00:00:00Z")) / 86400000
+  );
 
   // Stale if more than 1 calendar day old (allows for weekends: Friday prices on Saturday are OK)
   return { stale: daysOld > 1, latestDate: oldestLatest, daysOld };

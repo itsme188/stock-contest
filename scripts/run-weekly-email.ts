@@ -108,14 +108,42 @@ async function main() {
         }
       }
     }
+    const degraded: string[] = [];
     if (result.highlightsWarnings.length > 0) {
       logStep("email", `highlights warnings: ${result.highlightsWarnings.join("; ")}`);
+      degraded.push(`Highlights excluded tickers:\n  ${result.highlightsWarnings.join("\n  ")}`);
     }
     if (result.backfillFailed) {
       logStep("email", "WARNING: backfill failed earlier; week deltas may use stale prices");
+      degraded.push("Backfill failed — week-over-week deltas may use the most recent available close.");
     }
     if (result.vk.fetchFailed) {
       logStep("email", "WARNING: VK creds configured but fetch returned 0 chars");
+      degraded.push("Vital Knowledge market context was unavailable (creds configured, 0 chars returned).");
+    }
+    if (degraded.length > 0) {
+      // Non-fatal: the weekly email DID go out; this tells the operator that it
+      // shipped with known data gaps, without requiring an audit-table check.
+      // Residual AI-commentary violations are deliberately NOT included here —
+      // they have their own audit path (email_sends row + verifier log lines).
+      try {
+        await sendFailureAlert({
+          source: "weekly-email",
+          reason: "sent OK but with degraded data",
+          subjectLine: "[Stock Contest] weekly-email: sent with degraded data",
+          details:
+            degraded.join("\n\n") +
+            `\n\nreportDate=${result.reportDate}, recipients=${result.recipients}`,
+        });
+        logStep("email", "degraded-data alert sent to operator");
+      } catch (alertErr) {
+        // A degraded-data notice must never convert a successful send into a
+        // failure (the outer catch would exit 1 and audit-log an error).
+        logStep(
+          "email",
+          `degraded-data alert failed to send (non-fatal): ${alertErr instanceof Error ? alertErr.message : alertErr}`
+        );
+      }
     }
     if (result.recipients === 0) {
       // Silent-success bug guard: even though the API path returned ok,

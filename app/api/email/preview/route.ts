@@ -50,7 +50,7 @@ export async function POST() {
       );
     }
 
-    const reportData = buildReportData(players, trades, currentPrices, priceHistory);
+    const reportData = buildReportData(players, trades, currentPrices, priceHistory, undefined, contestData.contestStartDate);
     const vkStatus: { chars: number; credsConfigured: boolean; preview: string } = {
       chars: 0,
       credsConfigured: Boolean(gmailAddress && gmailAppPassword),
@@ -63,7 +63,9 @@ export async function POST() {
     vkStatus.preview = marketContext ? marketContext.slice(0, 160) : "";
     console.log(`[Email Preview] VK market context: ${vkStatus.chars ? `${vkStatus.chars} chars` : vkStatus.credsConfigured ? "empty (fetch failed)" : "empty (no credentials)"}`);
     const { text: commentary, violations, factual, verifierErrors, attempts } = await generateCommentary(reportData, anthropicApiKey, aiModel, marketContext);
-    const html = buildEmailHtml(reportData, commentary);
+    const previewNotes: string[] = [];
+    if (priceFreshness === "stale") previewNotes.push("Prices were not refreshed to today's close for this preview.");
+    const html = buildEmailHtml(reportData, commentary, previewNotes);
 
     return NextResponse.json({
       html,

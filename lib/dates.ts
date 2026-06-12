@@ -28,3 +28,25 @@ export function formatDateDisplay(
 ): string {
   return parseLocalDate(dateStr).toLocaleDateString(undefined, options);
 }
+
+// ET calendar date for a Unix-ms timestamp. Polygon daily bars are ET
+// sessions; deriving the date via toISOString() (UTC) can roll past
+// midnight and label the bar with the wrong day. en-CA renders YYYY-MM-DD.
+export function etDateFromMs(ms: number): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date(ms));
+}
+
+// DST-safe day arithmetic on YYYY-MM-DD strings: compute in UTC where every
+// day is exactly 86,400,000 ms. Local-time setDate() breaks on DST flips.
+export function addDays(ymd: string, n: number): string {
+  const [y, m, d] = ymd.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d) + n * 86_400_000);
+  const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(dt.getUTCDate()).padStart(2, "0");
+  return `${dt.getUTCFullYear()}-${mm}-${dd}`;
+}

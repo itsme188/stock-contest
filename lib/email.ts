@@ -11,12 +11,17 @@ import {
   getPriceAtDate,
   formatCurrency,
   formatPercent,
+  buildDailyValueSeries,
+  DEFAULT_CONTEST_START_DATE,
+  getAdvancedStats,
+  getPlayerSharpeRatio,
+  getBenchmarkReturnAtDate,
+  BENCHMARK_KEY,
 } from "@/lib/contest";
 import {
+  addDays,
   formatDateDisplay,
-  formatLocalYMD,
   localToday,
-  parseLocalDate,
 } from "@/lib/dates";
 
 // ---------- Types ----------
@@ -48,6 +53,7 @@ export interface WeeklyReportData {
   currentPrices: Record<string, number>;
   priceHistory: Record<string, Record<string, number>>;
   reportDate: string;
+  contestStartDate: string;
 }
 
 // ---------- Data Assembly ----------
@@ -86,14 +92,13 @@ export function buildReportData(
   trades: Trade[],
   currentPrices: Record<string, number>,
   priceHistory: Record<string, Record<string, number>> = {},
-  asOfDate?: string
+  asOfDate?: string,
+  contestStartDate?: string
 ): WeeklyReportData {
   const reportDate = asOfDate || localToday();
   const endTs = getMarketCloseTimestamp(reportDate);
   const startTs = endTs - 7 * 24 * 60 * 60 * 1000;
-  const oneWeekAgo = parseLocalDate(reportDate);
-  oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
-  const cutoffDate = formatLocalYMD(oneWeekAgo);
+  const cutoffDate = addDays(reportDate, -7);
 
   const currentLeaderboard = getLeaderboard(players, trades, currentPrices);
 
@@ -132,6 +137,7 @@ export function buildReportData(
     currentPrices,
     priceHistory,
     reportDate,
+    contestStartDate: contestStartDate ?? DEFAULT_CONTEST_START_DATE,
   };
 }
 
@@ -192,10 +198,7 @@ export interface WeeklyHighlights {
 export function buildWeeklyHighlights(data: WeeklyReportData): WeeklyHighlights {
   const { leaderboard, weeklyTrades, currentPrices, priceHistory, trades, reportDate } = data;
 
-  const now = parseLocalDate(reportDate);
-  const oneWeekAgo = new Date(now);
-  oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
-  const cutoffDate = formatLocalYMD(oneWeekAgo);
+  const cutoffDate = addDays(reportDate, -7);
 
   const isNewThisWeek = (pos: { ticker: string; trades: Trade[] }) =>
     pos.trades.length > 0 && pos.trades.every((t) => t.date >= cutoffDate);
@@ -266,13 +269,90 @@ export function renderHighlightsHtml(h: WeeklyHighlights): string {
   </div>`;
 }
 
+// ---------- Deterministic Milestones ----------
+//
+// Same philosophy as the highlights block: milestone detection is pure
+// computation, so code does it and the template renders it. The list is also
+// appended to the AI prompt as optional color (copy-don't-derive rules apply)
+// but the banner renders regardless of what the AI writes.
+
+export interface Milestone {
+  type: "leader_change" | "new_high" | "drawdown_recovered";
+  /** Rendered in the deterministic banner — may contain numbers. */
+  text: string;
+  /** Variant fed to the AI prompt — MUST be number-free so faithful copying
+   *  cannot trip detectCommentaryViolations' numeric regex. */
+  aiText: string;
+}
+
+const DRAWDOWN_RECOVERY_THRESHOLD_PCT = -5;
+
+export function detectMilestones(data: WeeklyReportData): Milestone[] {
+  const { leaderboard, weekDeltas, trades, priceHistory, reportDate, contestStartDate } = data;
+  const milestones: Milestone[] = [];
+
+  // Leader change: the current #1 moved up to get there this week. Skipped in
+  // week 1 — the "previous" leaderboard is an all-tied $100k list whose order
+  // is players-array insertion order, so rankChange is meaningless noise.
+  const weekAgo = addDays(reportDate, -7);
+  if (leaderboard.length > 1 && weekAgo >= contestStartDate) {
+    const leader = leaderboard[0];
+    const delta = weekDeltas.find((d) => d.playerId === leader.id);
+    if (delta && delta.rankChange > 0) {
+      milestones.push({
+        type: "leader_change",
+        text: `${leader.name} takes the contest lead this week.`,
+        aiText: `${leader.name} takes the contest lead this week.`,
+      });
+    }
+  }
+
+  // New contest high / drawdown recovery, per player: compare current
+  // totalValue against the pre-this-week peak of the daily value series.
+  for (const p of leaderboard) {
+    const series = buildDailyValueSeries(p.id, trades, priceHistory, contestStartDate, reportDate);
+    // Current-week points are deliberately excluded: only the report-day value
+    // (totalValue) is compared against the PRE-WEEK peak. A Tuesday spike that
+    // fades by Friday is not a milestone; a mid-week dip that recovers by
+    // Friday reads as new_high, not drawdown_recovered. Weekly-digest semantics.
+    const priorPoints = series.filter((pt) => pt.date <= weekAgo);
+    // <2 prior points = week 1; skip rather than spam everyone with "new high".
+    if (priorPoints.length < 2) continue;
+    const priorPeak = priorPoints.reduce((best, pt) => (pt.value > best.value ? pt : best));
+    // totalValue uses live currentPrices; priorPeak uses priceHistory. The
+    // email pipeline refreshes + backfills before this runs, so the sources
+    // agree in practice; a partially failed backfill could in theory produce
+    // a spurious new-high (tolerable for a weekly family email).
+    if (p.totalValue <= priorPeak.value) continue;
+
+    // Was there a ≥5% drawdown from that peak before this recovery?
+    const afterPeak = priorPoints.filter((pt) => pt.date > priorPeak.date);
+    const trough = afterPeak.length
+      ? Math.min(...afterPeak.map((pt) => pt.value))
+      : priorPeak.value;
+    const ddPct = priorPeak.value > 0 ? ((trough - priorPeak.value) / priorPeak.value) * 100 : 0;
+    if (ddPct <= DRAWDOWN_RECOVERY_THRESHOLD_PCT) {
+      milestones.push({
+        type: "drawdown_recovered",
+        text: `${p.name} recovered to a new contest high after a ${Math.abs(ddPct).toFixed(0)}% drawdown.`,
+        aiText: `${p.name} recovered to a new contest high after a sizable drawdown.`,
+      });
+    } else {
+      milestones.push({
+        type: "new_high",
+        text: `${p.name} reached a new contest high this week.`,
+        aiText: `${p.name} reached a new contest high this week.`,
+      });
+    }
+  }
+
+  return milestones;
+}
+
 export function buildCommentaryPrompt(data: WeeklyReportData, marketContext?: string): string {
   const { leaderboard, weeklyTrades, weekDeltas, players, currentPrices, priceHistory, trades, reportDate } = data;
 
-  const now = parseLocalDate(reportDate);
-  const oneWeekAgo = new Date(now);
-  oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
-  const cutoffDate = formatLocalYMD(oneWeekAgo);
+  const cutoffDate = addDays(reportDate, -7);
 
   // A position is "new this week" if the player did not hold any shares of
   // it at the start of the week — in that case the ticker's 7-day price
@@ -509,6 +589,11 @@ export function buildCommentaryPrompt(data: WeeklyReportData, marketContext?: st
     return lines.join("\n");
   })();
 
+  const milestones = detectMilestones(data);
+  const milestonesBlock = milestones.length
+    ? `\n\nMILESTONES (pre-computed; optional color — copy the wording, do not add numbers or invent others):\n${milestones.map((m) => `- ${m.aiText}`).join("\n")}`
+    : "";
+
   return `You are a portfolio analyst writing the narrative section of a weekly investor letter for a family stock picking contest between three participants: Daddy, Eli, and Yitzi. Each started with $100,000 in virtual capital. Today's report date is ${reportDate}.
 
 YOUR SCOPE IS INTENTIONALLY NARROW. All rankings, dollar amounts, percentages, and biggest-mover attributions are ALREADY rendered deterministically above your commentary in the email. The reader will see those facts separately. Your job is ONLY:
@@ -569,7 +654,7 @@ Cross-portfolio holdings (use these verbatim for attribution):
 ${crossHoldingsSummary}${marketContext ? `
 
 MARKET CONTEXT (from Vital Knowledge newsletter digests this week):
-${marketContext}` : ""}`;
+${marketContext}` : ""}${milestonesBlock}`;
 }
 
 export interface ViolationReport {
@@ -924,12 +1009,78 @@ export function formatCommentary(text: string): string {
 
 export function buildEmailHtml(
   data: WeeklyReportData,
-  commentary: string
+  commentary: string,
+  dataNotes: string[] = []
 ): string {
-  const { leaderboard, weeklyTrades, weekDeltas, players, trades, currentPrices, reportDate } = data;
+  const { leaderboard, weeklyTrades, weekDeltas, players, trades, currentPrices, priceHistory, reportDate, contestStartDate } = data;
 
   const commentaryHtml = formatCommentary(commentary);
   const highlightsHtml = renderHighlightsHtml(buildWeeklyHighlights(data));
+
+  const milestones = detectMilestones(data);
+  const milestonesHtml = milestones.length
+    ? `<div style="padding: 14px 24px; border-bottom: 1px solid #E5E7EB; background: #FFFBEB;">
+      ${milestones.map((m) => `<div style="font-size: 13px; color: #92400E; margin: 2px 0;">&#x1F3C5; ${m.text}</div>`).join("")}
+    </div>`
+    : "";
+
+  const spyReturn = getBenchmarkReturnAtDate(
+    reportDate,
+    priceHistory[BENCHMARK_KEY] || {},
+    contestStartDate
+  );
+
+  const statsRows = leaderboard
+    .map((p) => {
+      const adv = getAdvancedStats(p.id, trades, priceHistory, contestStartDate, { today: reportDate });
+      const sharpe = getPlayerSharpeRatio(p.id, trades, priceHistory, contestStartDate, { today: reportDate });
+      const num = (v: number | null, digits = 2, suffix = "") =>
+        v != null ? `${v.toFixed(digits)}${suffix}` : "—";
+      const pct = (v: number | null) => (v != null ? formatPercent(v) : "—");
+      return `<tr style="border-bottom: 1px solid #F3F4F6;">
+      <td style="padding: 6px 8px; font-size: 12px; font-weight: 600; color: #111827;">${p.name}</td>
+      <td style="padding: 6px 8px; font-size: 12px; text-align: right; color: ${p.returnPct >= 0 ? "#059669" : "#DC2626"};">${formatPercent(p.returnPct)}</td>
+      <td style="padding: 6px 8px; font-size: 12px; text-align: right; color: #4B5563;">${pct(spyReturn)}</td>
+      <td style="padding: 6px 8px; font-size: 12px; text-align: right; color: #4B5563;">${pct(adv.maxDrawdownPct)}</td>
+      <td style="padding: 6px 8px; font-size: 12px; text-align: right; color: #4B5563;">${num(adv.annualizedVolatilityPct, 1, "%")}</td>
+      <td style="padding: 6px 8px; font-size: 12px; text-align: right; color: #4B5563;">${num(sharpe)}</td>
+      <td style="padding: 6px 8px; font-size: 12px; text-align: right; color: #4B5563;">${num(adv.sortino)}</td>
+      <td style="padding: 6px 8px; font-size: 12px; text-align: right; color: #4B5563;">${num(adv.beta)}</td>
+      <td style="padding: 6px 8px; font-size: 12px; text-align: right; color: #4B5563;">${num(adv.payoffRatio)}</td>
+    </tr>`;
+    })
+    .join("");
+
+  const statsTableHtml = `<div style="padding: 24px; border-bottom: 1px solid #E5E7EB;">
+  <h2 style="margin: 0 0 12px 0; font-size: 16px; font-weight: 700; color: #111827;">&#x1F4D0; Contest Statistics</h2>
+  <table style="width: 100%; border-collapse: collapse;">
+    <thead>
+      <tr style="background: #F9FAFB;">
+        <th style="padding: 6px 8px; text-align: left; font-size: 10px; font-weight: 600; color: #6B7280; text-transform: uppercase;">Player</th>
+        <th style="padding: 6px 8px; text-align: right; font-size: 10px; font-weight: 600; color: #6B7280; text-transform: uppercase;">Return</th>
+        <th style="padding: 6px 8px; text-align: right; font-size: 10px; font-weight: 600; color: #6B7280; text-transform: uppercase;">SPY</th>
+        <th style="padding: 6px 8px; text-align: right; font-size: 10px; font-weight: 600; color: #6B7280; text-transform: uppercase;">Max DD</th>
+        <th style="padding: 6px 8px; text-align: right; font-size: 10px; font-weight: 600; color: #6B7280; text-transform: uppercase;">Vol</th>
+        <th style="padding: 6px 8px; text-align: right; font-size: 10px; font-weight: 600; color: #6B7280; text-transform: uppercase;">Sharpe</th>
+        <th style="padding: 6px 8px; text-align: right; font-size: 10px; font-weight: 600; color: #6B7280; text-transform: uppercase;">Sortino</th>
+        <th style="padding: 6px 8px; text-align: right; font-size: 10px; font-weight: 600; color: #6B7280; text-transform: uppercase;">Beta</th>
+        <th style="padding: 6px 8px; text-align: right; font-size: 10px; font-weight: 600; color: #6B7280; text-transform: uppercase;">Payoff</th>
+      </tr>
+    </thead>
+    <tbody>${statsRows}</tbody>
+  </table>
+  <p style="margin: 8px 0 0 0; font-size: 10px; color: #9CA3AF;">Vol = annualized volatility. Beta needs 20+ overlapping trading days with SPY data. &mdash; = insufficient data.</p>
+</div>`;
+
+  const escapeHtml = (s: string) =>
+    s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+  const dataNotesHtml = dataNotes.length
+    ? `<div style="padding: 12px 24px; background: #FFF7ED; border-top: 1px solid #FED7AA;">
+      <p style="margin: 0 0 4px 0; font-size: 11px; font-weight: 700; color: #9A3412; text-transform: uppercase; letter-spacing: 0.04em;">Data Notes</p>
+      ${dataNotes.map((n) => `<p style="margin: 2px 0; font-size: 11px; color: #9A3412;">${escapeHtml(n)}</p>`).join("")}
+    </div>`
+    : "";
 
   const rankColors = ["#EAB308", "#9CA3AF", "#D97706", "#D1D5DB"];
 
@@ -1059,6 +1210,7 @@ export function buildEmailHtml(
           <span style="font-weight: 700; font-size: 16px; color: #111827;">${p.name}</span>
           <span style="margin-left: 12px; font-weight: 600; color: ${returnColor}; font-size: 14px;">${formatPercent(stats.returnPct)}</span>
         </div>
+        <div style="font-size: 12px; color: #6B7280; margin-bottom: 10px;">vs. S&amp;P 500 since contest start: <strong style="color: ${returnColor};">${formatPercent(stats.returnPct)}</strong> &middot; SPY <strong style="color: #4B5563;">${spyReturn != null ? formatPercent(spyReturn) : "—"}</strong></div>
         <div style="display: flex; gap: 24px; margin-bottom: 12px; font-size: 13px; color: #4B5563; flex-wrap: wrap;">
           <span>Cash: <strong>${formatCurrency(stats.cashRemaining)}</strong></span>
           <span>Portfolio: <strong>${formatCurrency(stats.portfolioValue)}</strong></span>
@@ -1095,6 +1247,9 @@ export function buildEmailHtml(
 
     <div style="background: white; border-radius: 0 0 12px 12px; border: 1px solid #E5E7EB; border-top: none;">
 
+      <!-- Milestones banner (deterministic) -->
+      ${milestonesHtml}
+
       <!-- 7-Day Price Moves (deterministic) -->
       ${highlightsHtml}
 
@@ -1119,6 +1274,9 @@ export function buildEmailHtml(
           <tbody>${leaderboardRows}</tbody>
         </table>
       </div>
+
+      <!-- Contest Statistics -->
+      ${statsTableHtml}
 
       <!-- Weekly Trades -->
       <div style="padding: 24px; border-bottom: 1px solid #E5E7EB;">
@@ -1145,6 +1303,8 @@ export function buildEmailHtml(
         ${playerDetailsHtml}
       </div>
 
+      ${dataNotesHtml}
+
     </div>
 
     <!-- Footer -->
@@ -1163,9 +1323,10 @@ export function buildEmailHtml(
 
 export function buildPlainText(
   data: WeeklyReportData,
-  commentary: string
+  commentary: string,
+  dataNotes: string[] = []
 ): string {
-  const { leaderboard, weeklyTrades, weekDeltas, players, trades, currentPrices, reportDate } = data;
+  const { leaderboard, weeklyTrades, weekDeltas, players, trades, currentPrices, priceHistory, reportDate, contestStartDate } = data;
 
   // Strip markdown formatting
   const cleanCommentary = commentary
@@ -1189,6 +1350,23 @@ export function buildPlainText(
       : "";
     lines.push(
       `${i + 1}. ${p.name}: ${formatCurrency(p.totalValue)} ${formatPercent(p.returnPct)}${weekStr}`
+    );
+  });
+
+  const milestones = detectMilestones(data);
+  if (milestones.length) {
+    lines.push("", "MILESTONES", "-".repeat(60));
+    milestones.forEach((m) => lines.push(`* ${m.text}`));
+  }
+
+  const spyReturn = getBenchmarkReturnAtDate(reportDate, priceHistory[BENCHMARK_KEY] || {}, contestStartDate);
+  lines.push("", "CONTEST STATISTICS", "-".repeat(60));
+  leaderboard.forEach((p) => {
+    const adv = getAdvancedStats(p.id, trades, priceHistory, contestStartDate, { today: reportDate });
+    const sharpe = getPlayerSharpeRatio(p.id, trades, priceHistory, contestStartDate, { today: reportDate });
+    const num = (v: number | null, digits = 2) => (v != null ? v.toFixed(digits) : "—");
+    lines.push(
+      `${p.name}: return ${formatPercent(p.returnPct)} (SPY ${spyReturn != null ? formatPercent(spyReturn) : "—"}) | maxDD ${adv.maxDrawdownPct != null ? formatPercent(adv.maxDrawdownPct) : "—"} | vol ${num(adv.annualizedVolatilityPct, 1)}% | sharpe ${num(sharpe)} | sortino ${num(adv.sortino)} | beta ${num(adv.beta)} | payoff ${num(adv.payoffRatio)}`
     );
   });
 
@@ -1238,6 +1416,11 @@ export function buildPlainText(
     }
   });
 
+  if (dataNotes.length) {
+    lines.push("", "DATA NOTES", "-".repeat(60));
+    dataNotes.forEach((n) => lines.push(`! ${n}`));
+  }
+
   lines.push("", "---", "Powered by Stock Contest Tracker");
 
   return lines.join("\n");
@@ -1248,10 +1431,11 @@ export function buildPlainText(
 export async function sendWeeklyEmail(
   config: EmailConfig,
   data: WeeklyReportData,
-  commentary: string
+  commentary: string,
+  dataNotes: string[] = []
 ): Promise<void> {
-  const html = buildEmailHtml(data, commentary);
-  const text = buildPlainText(data, commentary);
+  const html = buildEmailHtml(data, commentary, dataNotes);
+  const text = buildPlainText(data, commentary, dataNotes);
   const recipients = Object.values(config.playerEmails).filter(Boolean);
 
   if (recipients.length === 0) {

@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  addDays,
+  etDateFromMs,
   formatDateDisplay,
   formatLocalYMD,
   localToday,
@@ -57,5 +59,39 @@ describe("formatDateDisplay", () => {
     expect(s).toMatch(/22/);
     expect(s).toMatch(/2026/);
     expect(s).toMatch(/04/);
+  });
+});
+
+describe("etDateFromMs", () => {
+  it("returns the ET calendar date for a UTC-midnight-ET timestamp", () => {
+    // 2026-06-10 00:00 ET (EDT, UTC-4) = 2026-06-10T04:00:00Z
+    expect(etDateFromMs(Date.UTC(2026, 5, 10, 4, 0, 0))).toBe("2026-06-10");
+  });
+
+  it("does not roll to the next day when UTC date differs from ET date", () => {
+    // 2026-06-10 23:30 ET = 2026-06-11T03:30:00Z — UTC says June 11, ET says June 10
+    expect(etDateFromMs(Date.UTC(2026, 5, 11, 3, 30, 0))).toBe("2026-06-10");
+  });
+
+  it("handles EST (winter, UTC-5)", () => {
+    // 2026-01-15 22:00 ET = 2026-01-16T03:00:00Z
+    expect(etDateFromMs(Date.UTC(2026, 0, 16, 3, 0, 0))).toBe("2026-01-15");
+  });
+});
+
+describe("addDays", () => {
+  it("adds and subtracts days across month and year boundaries", () => {
+    expect(addDays("2026-01-01", -1)).toBe("2025-12-31");
+    expect(addDays("2026-02-28", 1)).toBe("2026-03-01");
+  });
+
+  it("is DST-safe across spring forward (2026-03-08)", () => {
+    expect(addDays("2026-03-07", 7)).toBe("2026-03-14");
+    expect(addDays("2026-03-09", -1)).toBe("2026-03-08");
+  });
+
+  it("is DST-safe across fall back (2026-11-01)", () => {
+    expect(addDays("2026-11-02", -7)).toBe("2026-10-26");
+    expect(addDays("2026-10-31", 2)).toBe("2026-11-02");
   });
 });

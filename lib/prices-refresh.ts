@@ -12,7 +12,7 @@
 
 import { getContestData, saveContestData } from "@/lib/db";
 import { type Player, type Trade, getPlayerPositions } from "@/lib/contest";
-import { localToday } from "@/lib/dates";
+import { localToday, etDateFromMs } from "@/lib/dates";
 import { withPriceLock } from "@/lib/price-lock";
 import {
   IBApi,
@@ -102,13 +102,27 @@ function computeFreshness(priceDates: Record<string, string>, today: string): bo
   return dates.every((d) => d === today);
 }
 
-function persistPrices(updated: Record<string, number>, today: string) {
+// Persist refreshed prices. priceHistory entries are keyed by the bar's REAL
+// date (priceDates), not "today": Polygon /prev called pre-publication and
+// IBKR off-hours both return the PRIOR session's close. Writing it under
+// today's key was the root cause of the recurring stale-Friday-email bug —
+// under its own date it's just legitimate history (same as backfill).
+// currentPrices still updates either way: the most recent known close is the
+// best available current estimate regardless of which session produced it.
+export function persistPrices(
+  updated: Record<string, number>,
+  priceDates: Record<string, string>,
+  today: string
+) {
   const contestData = getContestData();
   const currentPrices = { ...contestData.currentPrices, ...updated };
   const priceHistory = { ...contestData.priceHistory };
   for (const [ticker, price] of Object.entries(updated)) {
     if (!priceHistory[ticker]) priceHistory[ticker] = {};
-    priceHistory[ticker][today] = price;
+    priceHistory[ticker] = {
+      ...priceHistory[ticker],
+      [priceDates[ticker] ?? today]: price,
+    };
   }
   saveContestData({ currentPrices, priceHistory });
 }
@@ -242,7 +256,7 @@ async function refreshIbkrPricesImpl(): Promise<RefreshResult> {
       }
     }
 
-    persistPrices(updated, today);
+    persistPrices(updated, priceDates, today);
 
     return {
       source: "ibkr",
@@ -297,9 +311,7 @@ async function refreshPolygonPricesImpl(): Promise<RefreshResult> {
           const data = await res.json();
           const closePrice = data.results?.[0]?.c;
           if (typeof closePrice === "number" && isFinite(closePrice) && closePrice > 0) {
-            const barDate = data.results[0].t
-              ? new Date(data.results[0].t).toISOString().split("T")[0]
-              : undefined;
+            const barDate = data.results[0].t ? etDateFromMs(data.results[0].t) : undefined;
             return { ticker, price: closePrice, barDate };
           }
           errors.push(`${ticker}: no valid price data`);
@@ -319,7 +331,7 @@ async function refreshPolygonPricesImpl(): Promise<RefreshResult> {
     }
   }
 
-  persistPrices(updated, today);
+  persistPrices(updated, priceDates, today);
 
   return {
     source: "polygon",

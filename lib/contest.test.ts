@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { localToday } from "@/lib/dates";
 import {
   Trade,
   Position,
@@ -19,6 +20,8 @@ import {
   getPositionDailyChange,
   getPositionDaysHeld,
   getPlayerSharpeRatio,
+  buildDailyValueSeries,
+  getAdvancedStats,
   getBenchmarkReturnAtDate,
   formatCurrency,
   formatPercent,
@@ -1004,7 +1007,7 @@ describe("getLastSaleProceeds", () => {
 });
 
 describe("getPriceStaleness", () => {
-  const today = new Date().toISOString().split("T")[0];
+  const today = localToday();
 
   it("returns not stale when no tickers in currentPrices", () => {
     const result = getPriceStaleness({}, {});
@@ -1422,5 +1425,175 @@ describe("getPerformanceChartData with benchmark", () => {
     ];
     const data = getPerformanceChartData(players, trades, {}, {});
     expect(data[0]).not.toHaveProperty("S&P 500");
+  });
+});
+
+describe("getPeriodStartDate DST safety", () => {
+  it("1W across spring forward lands exactly 7 calendar days back", () => {
+    expect(getPeriodStartDate("1W", "2026-01-14", "2026-03-12")).toBe("2026-03-05");
+  });
+  it("1D across fall back", () => {
+    expect(getPeriodStartDate("1D", "2026-01-14", "2026-11-02")).toBe("2026-11-01");
+  });
+  it("1M across spring forward", () => {
+    expect(getPeriodStartDate("1M", "2026-01-14", "2026-03-20")).toBe("2026-02-18");
+  });
+  it("YTD and ALL unchanged", () => {
+    expect(getPeriodStartDate("YTD", "2026-01-14", "2026-06-12")).toBe("2026-01-01");
+    expect(getPeriodStartDate("ALL", "2026-01-14", "2026-06-12")).toBe("2026-01-14");
+  });
+});
+
+describe("buildDailyValueSeries", () => {
+  const trades: Trade[] = [
+    { id: "1", playerId: "p1", type: "buy", ticker: "AAPL", shares: 10, price: 100, date: "2026-02-02", timestamp: 1 },
+  ];
+  const priceHistory = {
+    AAPL: { "2026-02-02": 100, "2026-02-03": 110, "2026-02-04": 105 },
+  };
+
+  it("returns one sorted point per known date within [start, today]", () => {
+    const series = buildDailyValueSeries("p1", trades, priceHistory, "2026-02-02", "2026-02-04");
+    expect(series.map((p) => p.date)).toEqual(["2026-02-02", "2026-02-03", "2026-02-04"]);
+    // 10 shares: 100k flat, then +100, then +50 vs cost
+    expect(series.map((p) => p.value)).toEqual([100000, 100100, 100050]);
+  });
+
+  it("excludes dates outside the window", () => {
+    const series = buildDailyValueSeries("p1", trades, priceHistory, "2026-02-03", "2026-02-03");
+    expect(series.map((p) => p.date)).toEqual(["2026-02-03"]);
+  });
+
+  it("returns all-cash series for a player with no trades", () => {
+    const series = buildDailyValueSeries("p1", [], { AAPL: { "2026-02-02": 100 } }, "2026-02-02", "2026-02-02");
+    expect(series).toEqual([{ date: "2026-02-02", value: 100000 }]);
+  });
+
+  it("ignores other players' trades", () => {
+    const otherTrades: Trade[] = [
+      { id: "1", playerId: "p2", type: "buy", ticker: "AAPL", shares: 10, price: 100, date: "2026-02-02", timestamp: 1 },
+    ];
+    const series = buildDailyValueSeries("p1", otherTrades, { AAPL: { "2026-02-02": 100 } }, "2026-02-02", "2026-02-02");
+    expect(series).toEqual([{ date: "2026-02-02", value: 100000 }]);
+  });
+});
+
+describe("getAdvancedStats", () => {
+  const buy = (ticker: string, shares: number, price: number, date: string, ts: number): Trade =>
+    ({ id: `b${ts}`, playerId: "p1", type: "buy", ticker, shares, price, date, timestamp: ts });
+  const sell = (ticker: string, shares: number, price: number, date: string, ts: number): Trade =>
+    ({ id: `s${ts}`, playerId: "p1", type: "sell", ticker, shares, price, date, timestamp: ts });
+
+  it("computes max drawdown with peak and trough dates", () => {
+    const trades = [buy("AAPL", 1000, 100, "2026-02-02", 1)];
+    const priceHistory = {
+      AAPL: { "2026-02-02": 100, "2026-02-03": 110, "2026-02-04": 99, "2026-02-05": 104 },
+    };
+    const s = getAdvancedStats("p1", trades, priceHistory, "2026-02-02", { today: "2026-02-05" });
+    // values: 100000, 110000, 99000, 104000 → peak 110000 (02-03), trough 99000 (02-04): dd = -11000/110000 = -10%
+    expect(s.maxDrawdownPct).toBeCloseTo(-10, 5);
+    expect(s.maxDrawdownPeakDate).toBe("2026-02-03");
+    expect(s.maxDrawdownTroughDate).toBe("2026-02-04");
+  });
+
+  it("returns 0 drawdown (null dates) for a monotonic rise", () => {
+    const trades = [buy("AAPL", 1000, 100, "2026-02-02", 1)];
+    const priceHistory = { AAPL: { "2026-02-02": 100, "2026-02-03": 101, "2026-02-04": 102 } };
+    const s = getAdvancedStats("p1", trades, priceHistory, "2026-02-02", { today: "2026-02-04" });
+    expect(s.maxDrawdownPct).toBe(0);
+    expect(s.maxDrawdownPeakDate).toBeNull();
+    expect(s.maxDrawdownTroughDate).toBeNull();
+  });
+
+  it("returns nulls on insufficient data", () => {
+    const s = getAdvancedStats("p1", [], {}, "2026-02-02", { today: "2026-02-02" });
+    expect(s.maxDrawdownPct).toBeNull();
+    expect(s.annualizedVolatilityPct).toBeNull();
+    expect(s.sortino).toBeNull();
+    expect(s.beta).toBeNull();
+    expect(s.payoffRatio).toBeNull();
+  });
+
+  it("computes annualized volatility from daily returns", () => {
+    const trades = [buy("AAPL", 1000, 100, "2026-02-02", 1)];
+    const priceHistory = { AAPL: { "2026-02-02": 100, "2026-02-03": 110, "2026-02-04": 99 } };
+    const s = getAdvancedStats("p1", trades, priceHistory, "2026-02-02", { today: "2026-02-04" });
+    // returns +10%, -10% → mean 0, sample variance (0.01+0.01)/1 = 0.02
+    expect(s.annualizedVolatilityPct).toBeCloseTo(Math.sqrt(0.02) * Math.sqrt(252) * 100, 6);
+  });
+
+  it("requires 20 matched observations for beta, else null", () => {
+    const trades = [buy("AAPL", 100, 100, "2026-02-02", 1)];
+    const priceHistory = {
+      AAPL: { "2026-02-02": 100, "2026-02-03": 101 },
+      [BENCHMARK_KEY]: { "2026-02-02": 500, "2026-02-03": 505 },
+    };
+    const s = getAdvancedStats("p1", trades, priceHistory, "2026-02-02", { today: "2026-02-03" });
+    expect(s.beta).toBeNull();
+    expect(s.alphaAnnualizedPct).toBeNull();
+  });
+
+  it("computes beta ≈ 1 for a portfolio tracking the benchmark exactly", () => {
+    const aapl: Record<string, number> = {};
+    const spy: Record<string, number> = {};
+    let price = 100;
+    for (let i = 0; i < 30; i++) {
+      const date = `2026-03-${String(i + 1).padStart(2, "0")}`;
+      price = price * (1 + (i % 2 === 0 ? 0.01 : -0.005));
+      aapl[date] = price;
+      spy[date] = price * 5;
+    }
+    const trades = [buy("AAPL", 1000, 100, "2026-03-01", 1)];
+    const s = getAdvancedStats(
+      "p1", trades, { AAPL: aapl, [BENCHMARK_KEY]: spy }, "2026-03-01", { today: "2026-03-30" }
+    );
+    expect(s.beta).not.toBeNull();
+    expect(s.beta!).toBeCloseTo(1, 10);
+    expect(s.alphaAnnualizedPct!).toBeCloseTo(0, 8);
+  });
+
+  it("computes payoff ratio and avg win/loss from closed trades", () => {
+    const trades = [
+      buy("A", 10, 100, "2026-02-02", 1),
+      sell("A", 10, 120, "2026-02-10", 2),  // +$200 win (+20%)
+      buy("B", 10, 100, "2026-02-03", 3),
+      sell("B", 10, 90, "2026-02-11", 4),   // -$100 loss (-10%)
+    ];
+    const s = getAdvancedStats("p1", trades, {}, "2026-02-02", { today: "2026-02-12" });
+    expect(s.payoffRatio).toBeCloseTo(2.0, 5);
+    expect(s.avgWinPct).toBeCloseTo(20, 5);
+    expect(s.avgLossPct).toBeCloseTo(-10, 5);
+  });
+
+  it("payoff ratio is null without both wins and losses", () => {
+    const trades = [buy("A", 10, 100, "2026-02-02", 1), sell("A", 10, 120, "2026-02-10", 2)];
+    const s = getAdvancedStats("p1", trades, {}, "2026-02-02", { today: "2026-02-12" });
+    expect(s.payoffRatio).toBeNull();
+    expect(s.avgWinPct).toBeCloseTo(20, 5);
+    expect(s.avgLossPct).toBeNull();
+  });
+
+  it("computes Sortino from a hand-computable series", () => {
+    // values 100k → 120k → 108k → 129.6k → 116.64k: returns +0.2, -0.1, +0.2, -0.1
+    // mean excess (RF=0) = 0.05; downside dev = sqrt((0.01 + 0.01) / 4) = sqrt(0.005)
+    const trades = [buy("AAPL", 1000, 100, "2026-02-02", 1)];
+    const priceHistory = {
+      AAPL: { "2026-02-02": 100, "2026-02-03": 120, "2026-02-04": 108, "2026-02-05": 129.6, "2026-02-06": 116.64 },
+    };
+    const s = getAdvancedStats("p1", trades, priceHistory, "2026-02-02", { today: "2026-02-06" });
+    expect(s.sortino).toBeCloseTo((0.05 / Math.sqrt(0.005)) * Math.sqrt(252), 6);
+  });
+
+  it("pairs the drawdown trough with its own (later) peak", () => {
+    // values 100k, 120k, 110k, 130k, 104k: early dd -8.33% (peak 02-03),
+    // later deeper dd -20% from the NEW peak (02-05) → must pair 02-05/02-06
+    const trades = [buy("AAPL", 1000, 100, "2026-02-02", 1)];
+    const priceHistory = {
+      AAPL: { "2026-02-02": 100, "2026-02-03": 120, "2026-02-04": 110, "2026-02-05": 130, "2026-02-06": 104 },
+    };
+    const s = getAdvancedStats("p1", trades, priceHistory, "2026-02-02", { today: "2026-02-06" });
+    expect(s.maxDrawdownPct).toBeCloseTo(-20, 5);
+    expect(s.maxDrawdownPeakDate).toBe("2026-02-05");
+    expect(s.maxDrawdownTroughDate).toBe("2026-02-06");
   });
 });

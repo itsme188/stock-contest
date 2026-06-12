@@ -22,6 +22,9 @@ export interface AlertContext {
   reason: string;
   /** Free-text body — error stack, last log lines, what was tried, etc. */
   details: string;
+  /** Full subject-line override. Default: "[Stock Contest] <source> failed: <reason>" —
+   *  use this for non-failure notices so the subject doesn't claim "failed". */
+  subjectLine?: string;
 }
 
 export async function sendFailureAlert(ctx: AlertContext): Promise<{ ok: boolean; reason?: string }> {
@@ -38,7 +41,7 @@ export async function sendFailureAlert(ctx: AlertContext): Promise<{ ok: boolean
     auth: { user: gmailAddress, pass: gmailAppPassword },
   });
 
-  const subject = `[Stock Contest] ${ctx.source} failed: ${ctx.reason}`.slice(0, 200);
+  const subject = (ctx.subjectLine ?? `[Stock Contest] ${ctx.source} failed: ${ctx.reason}`).slice(0, 200);
   const body = [
     `Source: ${ctx.source}`,
     `Reason: ${ctx.reason}`,

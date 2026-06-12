@@ -4,6 +4,8 @@ vi.mock("@/lib/db", () => ({
   getContestData: vi.fn(),
   saveContestData: vi.fn(),
   recordEmailSend: vi.fn(),
+  updateEmailSend: vi.fn(),
+  findBlockingWeeklySend: vi.fn().mockReturnValue(undefined),
 }));
 
 vi.mock("@/lib/email", () => ({

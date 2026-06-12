@@ -7,6 +7,7 @@ import {
   getPositionDailyChange,
   getPositionDaysHeld,
   getPeriodReturn,
+  getAdvancedStats,
   formatCurrency,
   formatPercent,
 } from "@/lib/contest";
@@ -35,6 +36,14 @@ export default function PlayerDetailCard({
     currentPrices,
     priceHistory,
     contestStartDate
+  );
+
+  // `today` is intentionally absent from the deps: getAdvancedStats defaults
+  // it to localToday(), and the daily price refresh updates priceHistory (a
+  // dep) before a stale window could matter.
+  const advanced = React.useMemo(
+    () => getAdvancedStats(player.id, trades, priceHistory, contestStartDate),
+    [player.id, trades, priceHistory, contestStartDate]
   );
 
   return (
@@ -108,6 +117,33 @@ export default function PlayerDetailCard({
                 : "red"
               : undefined
           }
+        />
+        <StatItem
+          label="Max Drawdown"
+          value={advanced.maxDrawdownPct != null ? formatPercent(advanced.maxDrawdownPct) : "—"}
+          color={advanced.maxDrawdownPct != null && advanced.maxDrawdownPct < 0 ? "red" : undefined}
+        />
+        <StatItem
+          label="Volatility (ann.)"
+          value={advanced.annualizedVolatilityPct != null ? `${advanced.annualizedVolatilityPct.toFixed(1)}%` : "—"}
+        />
+        <StatItem
+          label="Sortino"
+          value={advanced.sortino != null ? advanced.sortino.toFixed(2) : "—"}
+          color={advanced.sortino != null ? (advanced.sortino >= 0 ? "green" : "red") : undefined}
+        />
+        <StatItem
+          label="Beta / Alpha vs SPY"
+          value={
+            advanced.beta != null
+              ? `${advanced.beta.toFixed(2)} / ${advanced.alphaAnnualizedPct != null ? formatPercent(advanced.alphaAnnualizedPct) : "—"}`
+              : "—"
+          }
+        />
+        <StatItem
+          label="Payoff Ratio"
+          value={advanced.payoffRatio != null ? advanced.payoffRatio.toFixed(2) : "—"}
+          color={advanced.payoffRatio != null ? (advanced.payoffRatio >= 1 ? "green" : "red") : undefined}
         />
       </div>
 

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { type Player, type Trade } from "@/lib/contest";
+import { type Player, type Trade, BENCHMARK_KEY } from "@/lib/contest";
 import {
+  type WeeklyReportData,
   getWeeklyTrades,
   buildReportData,
   buildCommentaryPrompt,
@@ -11,6 +12,7 @@ import {
   detectFactualViolations,
   formatCommentary,
   renderHighlightsHtml,
+  detectMilestones,
 } from "@/lib/email";
 import { htmlToCommentaryMarkdown } from "@/lib/commentary";
 
@@ -878,5 +880,235 @@ describe("detectFactualViolations", () => {
     const prose = `Yitzi ${filler} The notable transaction was an LFMD sell.`;
     const v = detectFactualViolations(prose, weeklyTrades, tradePlayers, knownTickers);
     expect(v.missedTrades.some((m) => m.player === "Yitzi" && m.ticker === "LFMD")).toBe(false);
+  });
+});
+
+describe("buildReportData contestStartDate", () => {
+  it("buildReportData carries contestStartDate (defaulting when omitted)", () => {
+    const data = buildReportData([], [], {}, {}, "2026-06-12", "2026-01-14");
+    expect(data.contestStartDate).toBe("2026-01-14");
+    const defaulted = buildReportData([], [], {}, {}, "2026-06-12");
+    expect(defaulted.contestStartDate).toBe("2026-01-01");
+  });
+});
+
+describe("detectMilestones", () => {
+  it("flags a leader change when the new #1 moved up", () => {
+    const data = {
+      leaderboard: [
+        { id: "p1", name: "Eli", totalValue: 110000 },
+        { id: "p2", name: "Yitzi", totalValue: 105000 },
+      ],
+      weekDeltas: [
+        { playerId: "p1", rankChange: 1 },
+        { playerId: "p2", rankChange: -1 },
+      ],
+      trades: [],
+      priceHistory: {},
+      reportDate: "2026-06-12",
+      contestStartDate: "2026-01-14",
+    } as unknown as WeeklyReportData;
+    const ms = detectMilestones(data);
+    expect(ms.some((m) => m.type === "leader_change" && m.text.includes("Eli"))).toBe(true);
+  });
+
+  it("flags a new contest high", () => {
+    const trades = [
+      { id: "1", playerId: "p1", type: "buy", ticker: "A", shares: 1000, price: 100, date: "2026-05-01", timestamp: 1 },
+    ] as Trade[];
+    const priceHistory = {
+      A: { "2026-05-01": 100, "2026-05-15": 102, "2026-06-05": 101, "2026-06-12": 106 },
+    };
+    const data = {
+      leaderboard: [{ id: "p1", name: "Daddy", totalValue: 106000 }],
+      weekDeltas: [{ playerId: "p1", rankChange: 0 }],
+      trades,
+      priceHistory,
+      reportDate: "2026-06-12",
+      contestStartDate: "2026-05-01",
+    } as unknown as WeeklyReportData;
+    const ms = detectMilestones(data);
+    expect(ms.some((m) => m.type === "new_high" && m.text.includes("Daddy"))).toBe(true);
+  });
+
+  it("upgrades to drawdown_recovered when a ≥5% drawdown preceded the new high", () => {
+    const trades = [
+      { id: "1", playerId: "p1", type: "buy", ticker: "A", shares: 1000, price: 100, date: "2026-05-01", timestamp: 1 },
+    ] as Trade[];
+    const priceHistory = {
+      A: { "2026-05-01": 100, "2026-05-08": 104, "2026-05-22": 96, "2026-06-12": 107 },
+    };
+    const data = {
+      leaderboard: [{ id: "p1", name: "Daddy", totalValue: 107000 }],
+      weekDeltas: [{ playerId: "p1", rankChange: 0 }],
+      trades,
+      priceHistory,
+      reportDate: "2026-06-12",
+      contestStartDate: "2026-05-01",
+    } as unknown as WeeklyReportData;
+    const ms = detectMilestones(data);
+    expect(ms.some((m) => m.type === "drawdown_recovered")).toBe(true);
+    expect(ms.some((m) => m.type === "new_high")).toBe(false);
+  });
+
+  it("provides a number-free aiText for drawdown recoveries", () => {
+    const trades = [
+      { id: "1", playerId: "p1", type: "buy", ticker: "A", shares: 1000, price: 100, date: "2026-05-01", timestamp: 1 },
+    ] as Trade[];
+    const priceHistory = {
+      A: { "2026-05-01": 100, "2026-05-08": 104, "2026-05-22": 96, "2026-06-12": 107 },
+    };
+    const data = {
+      leaderboard: [{ id: "p1", name: "Daddy", totalValue: 107000 }],
+      weekDeltas: [{ playerId: "p1", rankChange: 0 }],
+      trades,
+      priceHistory,
+      reportDate: "2026-06-12",
+      contestStartDate: "2026-05-01",
+    } as unknown as WeeklyReportData;
+    const m = detectMilestones(data).find((x) => x.type === "drawdown_recovered")!;
+    expect(m.text).toMatch(/\d+% drawdown/);   // banner keeps the number
+    expect(m.aiText).not.toMatch(/[\d%]/);     // AI variant must be number-free
+  });
+
+  it("returns empty when nothing notable happened", () => {
+    const data = {
+      leaderboard: [{ id: "p1", name: "Daddy", totalValue: 99000 }],
+      weekDeltas: [{ playerId: "p1", rankChange: 0 }],
+      trades: [],
+      priceHistory: {},
+      reportDate: "2026-06-12",
+      contestStartDate: "2026-05-01",
+    } as unknown as WeeklyReportData;
+    expect(detectMilestones(data)).toEqual([]);
+  });
+
+  it("suppresses leader_change in week 1 (previous ranking is meaningless)", () => {
+    const data = {
+      leaderboard: [
+        { id: "p1", name: "Eli", totalValue: 110000 },
+        { id: "p2", name: "Yitzi", totalValue: 105000 },
+      ],
+      weekDeltas: [
+        { playerId: "p1", rankChange: 1 },
+        { playerId: "p2", rankChange: -1 },
+      ],
+      trades: [],
+      priceHistory: {},
+      reportDate: "2026-06-12",
+      contestStartDate: "2026-06-09", // contest started mid-week — weekAgo < start
+    } as unknown as WeeklyReportData;
+    expect(detectMilestones(data)).toEqual([]);
+  });
+});
+
+// ---- Task 15: email template upgrades ----
+//
+// Milestones banner, per-player vs-SPY line, contest statistics table,
+// data-notes footer, and AI-prompt milestones block.
+
+describe("email template upgrades", () => {
+  // Fixture: all three players each hold a position established before the
+  // report window.  priceHistory includes a BENCHMARK_KEY (SPY) series
+  // covering contestStartDate through the reportDate, so getBenchmarkReturnAtDate
+  // returns a non-null value and the vs-SPY line renders.
+  function reportDataFixture(): WeeklyReportData {
+    const fixtureTrades: Trade[] = [
+      makeTrade({ playerId: "p1", ticker: "AAPL", date: "2026-01-20", price: 100, shares: 100 }),
+      makeTrade({ playerId: "p2", ticker: "GOOG", date: "2026-01-20", price: 100, shares: 50 }),
+      makeTrade({ playerId: "p3", ticker: "MSFT", date: "2026-01-20", price: 100, shares: 80 }),
+    ];
+    const currentPrices = { AAPL: 110, GOOG: 95, MSFT: 105 };
+    const priceHistory = {
+      AAPL: { "2026-01-14": 95, "2026-01-20": 100, "2026-02-03": 105, "2026-02-10": 110 },
+      GOOG: { "2026-01-14": 105, "2026-01-20": 100, "2026-02-03": 98, "2026-02-10": 95 },
+      MSFT: { "2026-01-14": 98, "2026-01-20": 100, "2026-02-03": 102, "2026-02-10": 105 },
+      [BENCHMARK_KEY]: { "2026-01-14": 480, "2026-02-03": 490, "2026-02-10": 495 },
+    };
+    return buildReportData(players, fixtureTrades, currentPrices, priceHistory, "2026-02-10", "2026-01-14");
+  }
+
+  // Fixture: p1 (Daddy) buys AAPL this week and jumps from rank 1 → rank 0,
+  // displacing p2 (Eli) who held GOOG from before the week window.
+  // weekAgo = 2026-02-03 >= contestStartDate 2026-01-14 → leader_change fires.
+  function leaderChangeFixture(): WeeklyReportData {
+    const fixtureTrades: Trade[] = [
+      makeTrade({ playerId: "p2", ticker: "GOOG", date: "2026-01-20", price: 100, shares: 50 }),
+      makeTrade({ playerId: "p1", ticker: "AAPL", date: "2026-02-08", price: 100, shares: 200 }),
+    ];
+    const currentPrices = { AAPL: 130, GOOG: 110 };
+    const priceHistory = {
+      AAPL: { "2026-01-14": 100, "2026-02-03": 100, "2026-02-10": 130 },
+      GOOG: { "2026-01-14": 100, "2026-01-20": 100, "2026-02-03": 110, "2026-02-10": 110 },
+      [BENCHMARK_KEY]: { "2026-01-14": 480, "2026-02-03": 490, "2026-02-10": 495 },
+    };
+    return buildReportData(players, fixtureTrades, currentPrices, priceHistory, "2026-02-10", "2026-01-14");
+  }
+
+  it("renders the data-notes footer only when notes exist", () => {
+    const html = buildEmailHtml(reportDataFixture(), "Commentary.", ["Backfill failed this run."]);
+    expect(html).toContain("Data Notes");
+    expect(html).toContain("Backfill failed this run.");
+    const clean = buildEmailHtml(reportDataFixture(), "Commentary.");
+    expect(clean).not.toContain("Data Notes");
+  });
+
+  it("renders a per-player vs-SPY line when benchmark data exists", () => {
+    const html = buildEmailHtml(reportDataFixture(), "Commentary.");
+    expect(html).toContain("S&amp;P 500 since contest start");
+  });
+
+  it("renders the advanced stats table", () => {
+    const html = buildEmailHtml(reportDataFixture(), "Commentary.");
+    expect(html).toContain("Contest Statistics");
+    expect(html).toContain("Max DD");
+    expect(html).toContain("Sortino");
+  });
+
+  it("renders the milestones banner when milestones exist", () => {
+    const html = buildEmailHtml(leaderChangeFixture(), "Commentary.");
+    expect(html).toContain("takes the contest lead");
+  });
+
+  it("plain text includes stats and data notes", () => {
+    const text = buildPlainText(reportDataFixture(), "Commentary.", ["Backfill failed this run."]);
+    expect(text).toContain("CONTEST STATISTICS");
+    expect(text).toContain("DATA NOTES");
+  });
+
+  it("prompt includes pre-computed milestones with copy-verbatim rule", () => {
+    const prompt = buildCommentaryPrompt(leaderChangeFixture());
+    expect(prompt).toContain("MILESTONES");
+    expect(prompt).toContain("takes the contest lead");
+  });
+
+  it("prompt milestones block contains no % when drawdown_recovered fires", () => {
+    // Build real report data that produces a drawdown_recovered milestone:
+    // Player buys A at $100, A rises to $104 (new high), drops to $96 (>5% drawdown),
+    // then recovers to $107 (new contest high) — triggering drawdown_recovered.
+    const drawdownTrades: Trade[] = [
+      { id: "1", playerId: "p1", type: "buy", ticker: "A", shares: 1000, price: 100, date: "2026-05-01", timestamp: 1 } as Trade,
+    ];
+    const data = buildReportData(
+      [{ id: "p1", name: "Daddy", color: "#3B82F6" }],
+      drawdownTrades,
+      { A: 107 },
+      { A: { "2026-05-01": 100, "2026-05-08": 104, "2026-05-22": 96, "2026-06-12": 107 } },
+      "2026-06-12",
+      "2026-05-01"
+    );
+    const prompt = buildCommentaryPrompt(data);
+    // The MILESTONES block is appended at the end of the prompt.
+    const milestonesIdx = prompt.lastIndexOf("MILESTONES");
+    expect(milestonesIdx).toBeGreaterThan(-1);
+    const milestonesSection = prompt.slice(milestonesIdx);
+    expect(milestonesSection).toContain("sizable drawdown");
+    expect(milestonesSection).not.toMatch(/%/);
+  });
+
+  it("escapes HTML in data notes", () => {
+    const html = buildEmailHtml(reportDataFixture(), "Commentary.", ["note with <tag> & ampersand"]);
+    expect(html).toContain("note with &lt;tag&gt; &amp; ampersand");
+    expect(html).not.toContain("note with <tag>");
   });
 });

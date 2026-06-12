@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import crypto from "crypto";
 import path from "path";
-import { type Trade } from "./contest";
+import { type Trade, DEFAULT_CONTEST_START_DATE } from "./contest";
 
 export interface ContestData {
   players: unknown[];
@@ -228,7 +228,7 @@ export function getAuditLog(): { action: string; detail: string; created_at: str
 // dashboard surfaces and the failure-alert email cites for context.
 
 export type EmailSendKind = "weekly" | "daily-refresh" | "failure-alert";
-export type EmailSendStatus = "ok" | "skipped" | "error";
+export type EmailSendStatus = "ok" | "skipped" | "error" | "pending" | "test";
 
 export interface EmailSendRow {
   id: number;
@@ -253,9 +253,9 @@ export interface RecordEmailSendInput {
   errorMessage?: string;
 }
 
-export function recordEmailSend(input: RecordEmailSendInput): void {
+export function recordEmailSend(input: RecordEmailSendInput): number {
   const conn = getDb();
-  conn
+  const info = conn
     .prepare(
       `INSERT INTO email_sends
          (timestamp, kind, status, recipients_count, report_date,
@@ -272,6 +272,7 @@ export function recordEmailSend(input: RecordEmailSendInput): void {
       input.rankingViolations ?? null,
       input.errorMessage ?? null
     );
+  return Number(info.lastInsertRowid);
 }
 
 export function listRecentEmailSends(limit = 20): EmailSendRow[] {
@@ -279,6 +280,64 @@ export function listRecentEmailSends(limit = 20): EmailSendRow[] {
   return conn
     .prepare("SELECT * FROM email_sends ORDER BY id DESC LIMIT ?")
     .all(limit) as EmailSendRow[];
+}
+
+export interface UpdateEmailSendFields {
+  status: EmailSendStatus;
+  recipients?: number;
+  numericViolations?: number;
+  rankingViolations?: number;
+  errorMessage?: string;
+}
+
+// Transition a pending row to its final state. COALESCE preserves any field
+// the caller doesn't supply (e.g. recipients recorded at pending time).
+export function updateEmailSend(id: number, fields: UpdateEmailSendFields): void {
+  const conn = getDb();
+  // COALESCE preserves any field the caller doesn't supply. Note: a field set
+  // at INSERT time (e.g. recipients on the pending row) cannot be cleared to
+  // null through this function — only overwritten.
+  const info = conn
+    .prepare(
+      `UPDATE email_sends SET
+         status = ?,
+         recipients_count = COALESCE(?, recipients_count),
+         numeric_violations = COALESCE(?, numeric_violations),
+         ranking_violations = COALESCE(?, ranking_violations),
+         error_message = COALESCE(?, error_message)
+       WHERE id = ?`
+    )
+    .run(
+      fields.status,
+      fields.recipients ?? null,
+      fields.numericViolations ?? null,
+      fields.rankingViolations ?? null,
+      fields.errorMessage ?? null,
+      id
+    );
+  if (info.changes === 0) {
+    throw new Error(`updateEmailSend: no email_sends row with id=${id}`);
+  }
+}
+
+// Idempotency lookup: a weekly send for this report date is "blocking" if it
+// completed (ok, any age) or is in-flight (pending, newer than minFreshTimestamp).
+// pending rows with timestamp >= minFreshTimestamp block; older pending rows are
+// crashed attempts and do not.
+// Test sends are recorded with status 'test' and never block.
+export function findBlockingWeeklySend(
+  reportDate: string,
+  minFreshTimestamp: number
+): EmailSendRow | undefined {
+  const conn = getDb();
+  return conn
+    .prepare(
+      `SELECT * FROM email_sends
+       WHERE kind = 'weekly' AND report_date = ?
+         AND (status = 'ok' OR (status = 'pending' AND timestamp >= ?))
+       ORDER BY id DESC LIMIT 1`
+    )
+    .get(reportDate, minFreshTimestamp) as EmailSendRow | undefined;
 }
 
 // --- Database Health ---
@@ -347,7 +406,7 @@ export function _initSchema(conn: Database.Database): void {
 const DEFAULTS: Omit<ContestData, "trades"> & { trades: Trade[] } = {
   players: [],
   trades: [],
-  contestStartDate: "2026-01-01",
+  contestStartDate: DEFAULT_CONTEST_START_DATE,
   currentPrices: {},
   priceHistory: {},
   polygonApiKey: "",

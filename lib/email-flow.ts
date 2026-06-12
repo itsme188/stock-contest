@@ -6,8 +6,8 @@
 // On any thrown error: the route catches → returns 500; the scheduled script
 // catches → sends a failure-alert email.
 
-import { getContestData, saveContestData, recordEmailSend } from "@/lib/db";
-import { type Player, type Trade } from "@/lib/contest";
+import { getContestData, saveContestData, recordEmailSend, updateEmailSend, findBlockingWeeklySend } from "@/lib/db";
+import { type Player, type Trade, BENCHMARK_KEY } from "@/lib/contest";
 import {
   type ViolationReport,
   type FactualViolationReport,
@@ -27,6 +27,10 @@ import { localToday } from "@/lib/dates";
 
 const BACKFILL_TIMEOUT_MS = 90_000;
 const BACKFILL_RETRY_TIMEOUT_MS = 60_000;
+
+// A pending audit row younger than this blocks a duplicate send; older is
+// treated as a crashed attempt and does not block.
+const PENDING_BLOCK_MS = 30 * 60 * 1000;
 
 export interface RunWeeklyEmailOptions {
   /** Test recipient. When set, the send goes only to this address and the
@@ -132,7 +136,9 @@ export async function runWeeklyEmail(
   // Test sends (testTo) bypass so dry-runs can be retried.
   if (!testTo && !force) {
     const { lastWeeklyEmailSentDate } = getContestData();
-    if (lastWeeklyEmailSentDate === today) {
+    const blocking = findBlockingWeeklySend(today, Date.now() - PENDING_BLOCK_MS);
+    if (lastWeeklyEmailSentDate === today || blocking) {
+      const reason = blocking?.status === "pending" ? "send_in_progress" : "already_sent_today";
       recordEmailSend({
         kind: "weekly",
         status: "skipped",
@@ -141,7 +147,7 @@ export async function runWeeklyEmail(
       return {
         ok: true,
         skipped: true,
-        reason: "already_sent_today",
+        reason,
         reportDate: today,
         recipients: 0,
         violations: {
@@ -202,6 +208,7 @@ export async function runWeeklyEmail(
   const {
     currentPrices,
     priceHistory,
+    contestStartDate,
     gmailAddress,
     gmailAppPassword,
     anthropicApiKey,
@@ -222,7 +229,7 @@ export async function runWeeklyEmail(
     throw new WeeklyEmailConfigError("No recipient email addresses configured.");
   }
 
-  const reportData = buildReportData(players, trades, currentPrices, priceHistory);
+  const reportData = buildReportData(players, trades, currentPrices, priceHistory, undefined, contestStartDate);
   const highlights = buildWeeklyHighlights(reportData);
 
   // VK fetch: skipped when caller pre-generated (the preview already baked
@@ -272,21 +279,58 @@ export async function runWeeklyEmail(
     attempts = result.attempts;
   }
 
-  await sendWeeklyEmail(
-    { gmailAddress, gmailAppPassword, anthropicApiKey, playerEmails: effectiveEmails },
-    reportData,
-    commentary
-  );
+  // Data-quality notes rendered in the email footer — the reader sees known
+  // gaps in the email itself instead of needing the audit table.
+  const dataNotes: string[] = [];
+  if (!backfillStatus.ok) {
+    dataNotes.push(
+      "Some prior-day prices could not be updated this week — week-over-week figures may rely on the most recent available close."
+    );
+  }
+  if (!preGeneratedCommentary && credsConfigured && vkFetchFailed) {
+    dataNotes.push("Market-context newsletter was unavailable this week.");
+  }
+  for (const w of highlights.warnings) dataNotes.push(`Left out of the 7-day price moves section — ${w}`);
+  const benchmarkSeries = priceHistory[BENCHMARK_KEY];
+  if (!benchmarkSeries || Object.keys(benchmarkSeries).length === 0) {
+    dataNotes.push("S&P 500 benchmark data is unavailable — index comparisons show —.");
+  }
+
+  // Insert the pending row BEFORE the SMTP call: if the process dies between
+  // SMTP-accept and bookkeeping, the pending row blocks a duplicate send for
+  // PENDING_BLOCK_MS. Test sends bypass (retryable dry-runs by design).
+  let pendingId: number | null = null;
+  if (!testTo) {
+    pendingId = recordEmailSend({
+      kind: "weekly",
+      status: "pending",
+      recipients: recipients.length,
+      reportDate: reportData.reportDate,
+    });
+  }
+
+  try {
+    await sendWeeklyEmail(
+      { gmailAddress, gmailAppPassword, anthropicApiKey, playerEmails: effectiveEmails },
+      reportData,
+      commentary,
+      dataNotes
+    );
+  } catch (err) {
+    if (pendingId != null) {
+      updateEmailSend(pendingId, {
+        status: "error",
+        errorMessage: `SMTP send failed: ${err instanceof Error ? err.message : String(err)}`.slice(0, 2000),
+      });
+    }
+    throw err;
+  }
 
   if (!testTo) {
     saveContestData({ lastWeeklyEmailSentDate: reportData.reportDate });
   }
 
-  recordEmailSend({
-    kind: "weekly",
-    status: "ok",
-    recipients: recipients.length,
-    reportDate: reportData.reportDate,
+  const auditFields = {
     numericViolations: violations.numericViolations,
     // Aggregate all factual residuals (regex-detected + verifier-pass) into
     // the ranking_violations DB column. The audit row's error_message
@@ -303,7 +347,28 @@ export async function runWeeklyEmail(
           `unknownTickers=${JSON.stringify(factual.unknownTickers.slice(0, 5).map((u) => u.ticker))} ` +
           `verifier=${JSON.stringify(verifierErrors.slice(0, 5))}`
         : undefined,
-  });
+  };
+  if (pendingId != null) {
+    try {
+      updateEmailSend(pendingId, { status: "ok", ...auditFields });
+    } catch (e) {
+      // Do NOT rethrow: the email was delivered and lastWeeklyEmailSentDate is
+      // written; a finalization anomaly must not masquerade as a send failure.
+      console.error(
+        "[Weekly Email] updateEmailSend failed after successful send; email was delivered.",
+        e
+      );
+    }
+  } else {
+    // "test" not "ok": findBlockingWeeklySend must never let a dry-run block the real Friday send.
+    recordEmailSend({
+      kind: "weekly",
+      status: "test",
+      recipients: recipients.length,
+      reportDate: reportData.reportDate,
+      ...auditFields,
+    });
+  }
 
   return {
     ok: true,
