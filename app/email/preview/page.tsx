@@ -6,6 +6,18 @@ import { htmlToCommentaryMarkdown } from "@/lib/commentary";
 
 type VkStatus = { chars: number; credsConfigured: boolean; preview: string };
 
+// Residual AI-commentary validation counts after retries (from the 5-layer
+// validation pipeline). Non-zero residuals mean the prose shipped despite a
+// detected issue — worth a human glance before hitting Send.
+type ViolationCounts = {
+  numeric: number;
+  ranking: number;
+  missedTrades: number;
+  unknownTickers: number;
+  verifierErrors: number;
+  attempts: number;
+};
+
 export default function EmailPreview() {
   const [html, setHtml] = useState("");
   const [commentary, setCommentary] = useState("");
@@ -16,6 +28,7 @@ export default function EmailPreview() {
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const [vk, setVk] = useState<VkStatus | null>(null);
+  const [violations, setViolations] = useState<ViolationCounts | null>(null);
   const [iframeLoaded, setIframeLoaded] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
@@ -35,6 +48,7 @@ export default function EmailPreview() {
       setOriginalHtml(data.html);
       setOriginalCommentary(data.commentary);
       setVk(data.vk ?? null);
+      setViolations(data.violations ?? null);
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "Failed to generate preview"
@@ -222,6 +236,36 @@ export default function EmailPreview() {
             </div>
           </div>
         )}
+
+        {/* AI validation diagnostic — residual counts after retries */}
+        {violations && (() => {
+          const residuals: [string, number][] = [
+            ["numeric", violations.numeric],
+            ["ranking", violations.ranking],
+            ["missed trades", violations.missedTrades],
+            ["unknown tickers", violations.unknownTickers],
+            ["verifier", violations.verifierErrors],
+          ];
+          const flagged = residuals.filter(([, n]) => n > 0);
+          return (
+            <div className="max-w-4xl mx-auto px-4 pb-3">
+              <div
+                className={`text-xs px-3 py-2 rounded-lg inline-block ${
+                  flagged.length === 0
+                    ? "bg-green-50 text-green-800 border border-green-200"
+                    : "bg-amber-50 text-amber-800 border border-amber-200"
+                }`}
+              >
+                <span className="font-semibold">AI checks:</span>{" "}
+                {flagged.length === 0
+                  ? `clean after ${violations.attempts} attempt${violations.attempts === 1 ? "" : "s"}`
+                  : `residual issues after ${violations.attempts} attempt${violations.attempts === 1 ? "" : "s"} — ${flagged
+                      .map(([k, n]) => `${k}: ${n}`)
+                      .join(", ")} (review the commentary before sending)`}
+              </div>
+            </div>
+          );
+        })()}
       </div>
 
       {/* Preview area */}

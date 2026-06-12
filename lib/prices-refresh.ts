@@ -354,7 +354,13 @@ export interface OrchestratedRefreshResult extends RefreshResult {
 // /prev publishes ~15 min after market close), retry up to 2 times with
 // 5-minute delays. Returns the final result plus retry count so the caller
 // (scheduled script) can flag stale-data sends in the audit log.
-export async function refreshAllOpenPrices(): Promise<OrchestratedRefreshResult> {
+// `maxStaleRetries: 0` skips the retry sleeps entirely — the preview path
+// uses this because it labels stale prices in its output anyway; sleeping
+// 10 minutes off-hours (when prices CANNOT become fresh) adds nothing.
+export async function refreshAllOpenPrices(
+  options?: { maxStaleRetries?: number }
+): Promise<OrchestratedRefreshResult> {
+  const maxStaleRetries = options?.maxStaleRetries ?? MAX_STALE_RETRIES;
   let ibkrResult: RefreshResult | null = null;
   let ibkrError: string | undefined;
 
@@ -374,10 +380,10 @@ export async function refreshAllOpenPrices(): Promise<OrchestratedRefreshResult>
 
   let result = await refreshPolygonPrices();
   let staleRetries = 0;
-  while (!result.pricesAreFresh && staleRetries < MAX_STALE_RETRIES) {
+  while (!result.pricesAreFresh && staleRetries < maxStaleRetries) {
     staleRetries++;
     console.warn(
-      `[Refresh] Polygon stale, retry ${staleRetries}/${MAX_STALE_RETRIES} in ${STALE_RETRY_DELAY_MS / 1000}s`
+      `[Refresh] Polygon stale, retry ${staleRetries}/${maxStaleRetries} in ${STALE_RETRY_DELAY_MS / 1000}s`
     );
     await new Promise((r) => setTimeout(r, STALE_RETRY_DELAY_MS));
     result = await refreshPolygonPrices();

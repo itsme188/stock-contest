@@ -19,7 +19,10 @@ export async function POST() {
     // visually consistent.
     let priceFreshness: "fresh" | "stale" | "noop" = "noop";
     try {
-      const refresh = await refreshAllOpenPrices();
+      // No stale-retry sleeps for previews: off-hours the retries sleep 10
+      // minutes for prices that cannot become fresh, and the preview already
+      // labels staleness via priceFreshness + the Data Notes footer.
+      const refresh = await refreshAllOpenPrices({ maxStaleRetries: 0 });
       priceFreshness = refresh.pricesAreFresh ? "fresh" : "stale";
     } catch (err) {
       if (!(err instanceof NoOpenPositionsError)) {
